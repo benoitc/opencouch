@@ -13,14 +13,14 @@
 -module(couch_work_queue).
 -behaviour(gen_server).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 % public API
 -export([new/1, queue/2, dequeue/1, dequeue/2, close/1, item_count/1, size/1]).
 
 % gen_server callbacks
--export([init/1, terminate/2]).
--export([handle_call/3, handle_cast/2, code_change/3, handle_info/2]).
+-export([init/1, handle_call/3, handle_cast/2, code_change/3,
+         handle_info/2, terminate/2]).
 
 -record(q, {
     queue = queue:new(),
@@ -48,7 +48,7 @@ queue(Wq, Item) ->
 dequeue(Wq) ->
     dequeue(Wq, all).
 
-    
+
 dequeue(Wq, MaxItems) ->
     try
         gen_server:call(Wq, {dequeue, MaxItems}, infinity)
@@ -75,7 +75,7 @@ size(Wq) ->
 
 close(Wq) ->
     gen_server:cast(Wq, close).
-    
+
 
 init(Options) ->
     Q = #q{
@@ -85,11 +85,6 @@ init(Options) ->
     },
     {ok, Q, hibernate}.
 
-
-terminate(_Reason, #q{work_waiters=Workers}) ->
-    lists:foreach(fun({W, _}) -> gen_server:reply(W, closed) end, Workers).
-
-    
 handle_call({queue, Item, Size}, From, #q{work_waiters = []} = Q0) ->
     Q = Q0#q{size = Q0#q.size + Size,
                 items = Q0#q.items + 1,
@@ -129,6 +124,24 @@ handle_call(size, _From, Q) ->
     {reply, Q#q.size, Q}.
 
 
+handle_cast(close, #q{items = 0} = Q) ->
+    {stop, normal, Q};
+
+handle_cast(close, Q) ->
+    {noreply, Q#q{close_on_dequeue = true}}.
+
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+handle_info(X, Q) ->
+    {stop, X, Q}.
+
+terminate(_Reason, #q{work_waiters=Workers}) ->
+    lists:foreach(fun({W, _}) -> gen_server:reply(W, closed) end, Workers).
+
+
+
 deliver_queue_items(Max, Q) ->
     #q{
         queue = Queue,
@@ -163,25 +176,12 @@ dequeue_items(0, Size, Queue, Blocked, DequeuedAcc) ->
 
 dequeue_items(NumItems, Size, Queue, Blocked, DequeuedAcc) ->
     {{value, {Item, ItemSize}}, Queue2} = queue:out(Queue),
-    case Blocked of
-    [] ->
-        Blocked2 = Blocked;
-    [From | Blocked2] ->
-        gen_server:reply(From, ok)
+    Blocked2 = case Blocked of
+        [] ->
+            Blocked;
+        [From | Blocked1] ->
+            gen_server:reply(From, ok),
+            Blocked1
     end,
-    dequeue_items(
-        NumItems - 1, Size - ItemSize, Queue2, Blocked2, [Item | DequeuedAcc]).
-    
-
-handle_cast(close, #q{items = 0} = Q) ->
-    {stop, normal, Q};
-
-handle_cast(close, Q) ->
-    {noreply, Q#q{close_on_dequeue = true}}.
-
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-handle_info(X, Q) ->
-    {stop, X, Q}.
+    dequeue_items(NumItems - 1, Size - ItemSize, Queue2, Blocked2,
+                  [Item | DequeuedAcc]).

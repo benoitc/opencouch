@@ -12,7 +12,6 @@
 
 -module(couch_server).
 -behaviour(gen_server).
--behaviour(config_listener).
 
 -export([open/2,create/2,delete/2,get_version/0,get_uuid/0]).
 -export([all_databases/0, all_databases/2]).
@@ -24,7 +23,7 @@
 % config_listener api
 -export([handle_config_change/5]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -record(server,{
     root_dir = [],
@@ -34,6 +33,12 @@
     start_time="",
     lru = couch_lru:new()
     }).
+
+-ifdef(crypto_compat).
+-define(SHA(Data), crypto:sha(Data)).
+-else.
+-define(SHA(Data), crypto:hash(sha, Data)).
+-endif.
 
 dev_start() ->
     couch:stop(),
@@ -156,7 +161,7 @@ is_admin(User, ClearPwd) ->
     case config:get("admins", User) of
     "-hashed-" ++ HashedPwdAndSalt ->
         [HashedPwd, Salt] = string:tokens(HashedPwdAndSalt, ","),
-        couch_util:to_hex(crypto:sha(ClearPwd ++ Salt)) == HashedPwd;
+        couch_util:to_hex(?SHA(ClearPwd ++ Salt)) == HashedPwd;
     _Else ->
         false
     end.
@@ -240,24 +245,24 @@ all_databases(Fun, Acc0) ->
     {ok, #server{root_dir=Root}} = gen_server:call(couch_server, get_server),
     NormRoot = couch_util:normpath(Root),
     FinalAcc = try
-    filelib:fold_files(Root,
-        "^[a-z0-9\\_\\$()\\+\\-]*" % stock CouchDB name regex
-        "(\\.[0-9]{10,})?"         % optional shard timestamp
-        "\\.couch$",               % filename extension
-        true,
-            fun(Filename, AccIn) ->
-                NormFilename = couch_util:normpath(Filename),
-                case NormFilename -- NormRoot of
-                [$/ | RelativeFilename] -> ok;
-                RelativeFilename -> ok
-                end,
-                case Fun(?l2b(filename:rootname(RelativeFilename, ".couch")), AccIn) of
-                {ok, NewAcc} -> NewAcc;
-                {stop, NewAcc} -> throw({stop, Fun, NewAcc})
-                end
+        filelib:fold_files(Root,
+                           "^[a-z0-9\\_\\$()\\+\\-]*" % stock CouchDB name regex
+                           "(\\.[0-9]{10,})?"         % optional shard timestamp
+                           "\\.couch$",               % filename extension
+                           true,  fun(Filename, AccIn) ->
+                    NormFilename = couch_util:normpath(Filename),
+                    RelativeFilename = case NormFilename -- NormRoot of
+                        [$/ | RelFilename] -> RelFilename;
+                        RelFilename -> RelFilename
+                    end,
+                    case Fun(?l2b(filename:rootname(RelativeFilename,
+                                                    ".couch")), AccIn) of
+                        {ok, NewAcc} -> NewAcc;
+                        {stop, NewAcc} -> throw({stop, Fun, NewAcc})
+                    end
             end, Acc0)
     catch throw:{stop, Fun, Acc1} ->
-         Acc1
+            Acc1
     end,
     {ok, FinalAcc}.
 
@@ -323,7 +328,7 @@ handle_call(get_server, _From, Server) ->
 handle_call({open_result, DbName, {ok, Db}}, _From, Server) ->
     link(Db#db.main_pid),
     case erase({async_open, DbName}) of undefined -> ok; T0 ->
-        ?LOG_INFO("needed ~p ms to open new ~s", [timer:now_diff(now(),T0)/1000,
+        lager:info("needed ~p ms to open new ~s", [timer:now_diff(now(),T0)/1000,
             DbName])
     end,
     % icky hack of field values - compactor_pid used to store clients
@@ -353,7 +358,7 @@ handle_call({open_result, DbName, Error}, _From, Server) ->
     % icky hack of field values - compactor_pid used to store clients
     [#db{fd=ReqType, compactor_pid=Froms}=Db] = ets:lookup(couch_dbs, DbName),
     [gen_server:reply(From, Error) || From <- Froms],
-    ?LOG_INFO("open_result error ~p for ~s", [Error, DbName]),
+    lager:info("open_result error ~p for ~s", [Error, DbName]),
     true = ets:delete(couch_dbs, DbName),
     NewServer = case ReqType of
         {create, DbName, Filepath, Options, CrFrom} ->
@@ -383,7 +388,7 @@ handle_call({open, DbName, Options}, From, Server) ->
         true = ets:insert(couch_dbs, Db#db{compactor_pid = [From|Froms]}),
         if length(Froms) =< 10 -> ok; true ->
             Fmt = "~b clients waiting to open db ~s",
-            ?LOG_INFO(Fmt, [length(Froms), DbName])
+            lager:info(Fmt, [length(Froms), DbName])
         end,
         {noreply, Server};
     [#db{} = Db] ->
@@ -484,9 +489,9 @@ handle_info({'EXIT', Pid, Reason}, Server) ->
         if Reason /= snappy_nif_not_loaded -> ok; true ->
             Msg = io_lib:format("To open the database `~s`, Apache CouchDB "
                 "must be built with Erlang OTP R13B04 or higher.", [DbName]),
-            ?LOG_ERROR(Msg, [])
+            lager:error(Msg, [])
         end,
-        ?LOG_INFO("db ~s died with reason ~p", [DbName, Reason]),
+        lager:info("db ~s died with reason ~p", [DbName, Reason]),
         % icky hack of field values - compactor_pid used to store clients
         if is_list(Froms) ->
             [gen_server:reply(From, Reason) || From <- Froms];

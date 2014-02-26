@@ -31,19 +31,70 @@
 -export([with_db/2]).
 -export([rfc1123_date/0, rfc1123_date/1]).
 -export([integer_to_boolean/1, boolean_to_integer/1]).
+-export([ensure_all_started/1, ensure_all_started/2]).
 
--include_lib("couch/include/couch_db.hrl").
+-ifdef(crypto_compat).
+-define(MD5(Data), crypto:md5(Data)).
+-define(MD5_INIT(), crypto:md5_init()).
+-define(MD5_UPDATE(Ctx, Data), crypto:md5_update(Ctx, Data)).
+-define(MD5_FINAL(Ctx), crypto:md5_final(Ctx)).
+-else.
+-define(MD5(Data), crypto:hash(md5, Data)).
+-define(MD5_INIT(), crypto:hash_init(md5)).
+-define(MD5_UPDATE(Ctx, Data), crypto:hash_update(Ctx, Data)).
+-define(MD5_FINAL(Ctx), crypto:hash_final(Ctx)).
+-endif.
+
+-include("couch_db.hrl").
 
 % arbitrarily chosen amount of memory to use before flushing to disk
 -define(FLUSH_MAX_MEM, 10000000).
 
+-spec ensure_all_started(Application) -> {'ok', Started} | {'error', Reason} when
+      Application :: atom(),
+      Started :: [atom()],
+      Reason :: term().
+ensure_all_started(Application) ->
+    ensure_all_started(Application, temporary).
+
+-spec ensure_all_started(Application, Type) -> {'ok', Started} | {'error', Reason} when
+      Application :: atom(),
+      Type ::  'permanent' | 'transient' | 'temporary',
+      Started :: [atom()],
+      Reason :: term().
+ensure_all_started(Application, Type) ->
+    case ensure_all_started(Application, Type, []) of
+	{ok, Started} ->
+	    {ok, lists:reverse(Started)};
+	{error, Reason, Started} ->
+	    [application:stop(App) || App <- Started],
+	    {error, Reason}
+    end.
+
+ensure_all_started(Application, Type, Started) ->
+    case application:start(Application, Type) of
+	ok ->
+	    {ok, [Application | Started]};
+	{error, {already_started, Application}} ->
+	    {ok, Started};
+	{error, {not_started, Dependency}} ->
+	    case ensure_all_started(Dependency, Type, Started) of
+		{ok, NewStarted} ->
+		    ensure_all_started(Application, Type, NewStarted);
+		Error ->
+		    Error
+	    end;
+	{error, Reason} ->
+	    {error, {Application, Reason}, Started}
+    end.
+
 priv_dir() ->
     case code:priv_dir(couch) of
-        {error, bad_name} ->
-            % small hack, in dev mode "app" is couchdb. Fixing requires
-            % renaming src/couch to src/couch. Not really worth the hassle.
-            % -Damien
-            code:priv_dir(couchdb);
+        {error, _} ->
+            %% try to get relative priv dir. useful for tests.
+            EbinDir = filename:dirname(code:which(?MODULE)),
+            AppPath = filename:dirname(EbinDir),
+            filename:join(AppPath, "priv");
         Dir -> Dir
     end.
 
@@ -378,20 +429,20 @@ verify(_X, _Y) -> false.
 
 -spec md5(Data::(iolist() | binary())) -> Digest::binary().
 md5(Data) ->
-    try crypto:md5(Data) catch error:_ -> erlang:md5(Data) end.
+    ?MD5(Data).
 
 -spec md5_init() -> Context::binary().
 md5_init() ->
-    try crypto:md5_init() catch error:_ -> erlang:md5_init() end.
+    ?MD5_INIT().
 
 -spec md5_update(Context::binary(), Data::(iolist() | binary())) ->
     NewContext::binary().
 md5_update(Ctx, D) ->
-    try crypto:md5_update(Ctx,D) catch error:_ -> erlang:md5_update(Ctx,D) end.
+   ?MD5_UPDATE(Ctx, D).
 
 -spec md5_final(Context::binary()) -> Digest::binary().
 md5_final(Ctx) ->
-    try crypto:md5_final(Ctx) catch error:_ -> erlang:md5_final(Ctx) end.
+    ?MD5_FINAL(Ctx).
 
 % linear search is faster for small lists, length() is 0.5 ms for 100k list
 reorder_results(Keys, SortedResults) when length(Keys) < 100 ->

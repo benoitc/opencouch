@@ -16,9 +16,10 @@
 -export([btree_by_id_split/1, btree_by_id_join/2, btree_by_id_reduce/2]).
 -export([btree_by_seq_split/1, btree_by_seq_join/2, btree_by_seq_reduce/2]).
 -export([make_doc_summary/2]).
--export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
+-export([init/1, terminate/2, handle_call/3, handle_cast/2,
+         code_change/3, handle_info/2]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -record(comp_header, {
     db_header,
@@ -34,29 +35,31 @@
 }).
 
 init({DbName, Filepath, Fd, Options}) ->
-    case lists:member(create, Options) of
-    true ->
-        % create a new header and writes it to the file
-        Header =  #db_header{},
-        ok = couch_file:write_header(Fd, Header),
-        % delete any old compaction files that might be hanging around
-        RootDir = config:get("couchdb", "database_dir", "."),
-        couch_file:delete(RootDir, Filepath ++ ".compact"),
-        couch_file:delete(RootDir, Filepath ++ ".compact.data"),
-        couch_file:delete(RootDir, Filepath ++ ".compact.meta");
-    false ->
-        case couch_file:read_header(Fd) of
-        {ok, Header} ->
-            ok;
-        no_valid_header ->
+    Header = case lists:member(create, Options) of
+        true ->
             % create a new header and writes it to the file
-            Header =  #db_header{},
-            ok = couch_file:write_header(Fd, Header),
+            Header1 =  #db_header{},
+            ok = couch_file:write_header(Fd, Header1),
             % delete any old compaction files that might be hanging around
-            file:delete(Filepath ++ ".compact"),
-            file:delete(Filepath ++ ".compact.data"),
-            file:delete(Filepath ++ ".compact.meta")
-        end
+            RootDir = config:get("couchdb", "database_dir", "."),
+            couch_file:delete(RootDir, Filepath ++ ".compact"),
+            couch_file:delete(RootDir, Filepath ++ ".compact.data"),
+            couch_file:delete(RootDir, Filepath ++ ".compact.meta"),
+            Header1;
+        false ->
+            case couch_file:read_header(Fd) of
+                {ok, Header1} ->
+                    Header1;
+                no_valid_header ->
+                    % create a new header and writes it to the file
+                    Header1 =  #db_header{},
+                    ok = couch_file:write_header(Fd, Header1),
+                    % delete any old compaction files that might be hanging around
+                    file:delete(Filepath ++ ".compact"),
+                    file:delete(Filepath ++ ".compact.data"),
+                    file:delete(Filepath ++ ".compact.meta"),
+                    Header1
+            end
     end,
     Db = init_db(DbName, Filepath, Fd, Header, Options),
     % we don't load validation funs here because the fabric query is liable to
@@ -107,7 +110,7 @@ handle_call(cancel_compact, _From, #db{compactor_pid = Pid} = Db) ->
 handle_call(increment_update_seq, _From, Db) ->
     Db2 = commit_data(Db#db{update_seq=Db#db.update_seq+1}),
     ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
-    couch_db_update_notifier:notify({updated, Db#db.name}),
+    couch_event:notify({updated, Db#db.name}),
     {reply, {ok, Db2#db.update_seq}, Db2};
 
 handle_call({set_security, NewSec}, _From, #db{compression = Comp} = Db) ->
@@ -189,7 +192,7 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
             header=Header#db_header{purge_seq=PurgeSeq+1, purged_docs=Pointer}}),
 
     ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
-    couch_db_update_notifier:notify({updated, Db#db.name}),
+    couch_event:notify({updated, Db#db.name}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2}.
 
 
@@ -200,7 +203,7 @@ handle_cast({load_validation_funs, ValidationFuns}, Db) ->
 handle_cast(start_compact, Db) ->
     case Db#db.compactor_pid of
     nil ->
-        ?LOG_INFO("Starting compaction for db \"~s\"", [Db#db.name]),
+        lager:info("Starting compaction for db \"~s\"", [Db#db.name]),
         Pid = spawn_link(fun() -> start_copy_compact(Db) end),
         Db2 = Db#db{compactor_pid=Pid},
         ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
@@ -230,7 +233,7 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
             revs_limit = Db#db.revs_limit
         }),
 
-        ?LOG_DEBUG("CouchDB swapping files ~s and ~s.",
+        lager:debug("CouchDB swapping files ~s and ~s.",
                 [Filepath, CompactFilepath]),
         ok = file:rename(CompactFilepath, Filepath ++ ".compact"),
         RootDir = config:get("couchdb", "database_dir", "."),
@@ -242,11 +245,11 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
         close_db(Db),
         NewDb3 = refresh_validate_doc_funs(NewDb2),
         ok = gen_server:call(couch_server, {db_updated, NewDb3}, infinity),
-        couch_db_update_notifier:notify({compacted, NewDb3#db.name}),
-        ?LOG_INFO("Compaction for db \"~s\" completed.", [Db#db.name]),
+        couch_event:notify({compacted, NewDb3#db.name}),
+        lager:info("Compaction for db \"~s\" completed.", [Db#db.name]),
         {noreply, NewDb3#db{compactor_pid=nil}};
     false ->
-        ?LOG_INFO("Compaction file still behind main file "
+        lager:info("Compaction file still behind main file "
             "(update seq=~p. compact update seq=~p). Retrying.",
             [Db#db.update_seq, NewSeq]),
         close_db(NewDb),
@@ -257,37 +260,36 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
     end;
 
 handle_cast(Msg, #db{name = Name} = Db) ->
-    ?LOG_ERROR("Database `~s` updater received unexpected cast: ~p", [Name, Msg]),
+    lager:error("Database `~s` updater received unexpected cast: ~p", [Name, Msg]),
     {stop, Msg, Db}.
 
 
 handle_info({update_docs, Client, GroupedDocs, NonRepDocs, MergeConflicts,
         FullCommit}, Db) ->
     GroupedDocs2 = [[{Client, D} || D <- DocGroup] || DocGroup <- GroupedDocs],
-    if NonRepDocs == [] ->
-        {GroupedDocs3, Clients, FullCommit2} = collect_updates(GroupedDocs2,
-                [Client], MergeConflicts, FullCommit);
-    true ->
-        GroupedDocs3 = GroupedDocs2,
-        FullCommit2 = FullCommit,
-        Clients = [Client]
+    {GroupedDocs3, Clients, FullCommit2} = case NonRepDocs of
+        [] ->
+            collect_updates(GroupedDocs2,[ Client], MergeConflicts,
+                            FullCommit);
+        _ ->
+            {GroupedDocs2, FullCommit, [Client]}
     end,
     NonRepDocs2 = [{Client, NRDoc} || NRDoc <- NonRepDocs],
     try update_docs_int(Db, GroupedDocs3, NonRepDocs2, MergeConflicts,
-                FullCommit2) of
-    {ok, Db2, UpdatedDDocIds} ->
-        ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
-        if Db2#db.update_seq /= Db#db.update_seq ->
-            couch_db_update_notifier:notify({updated, Db2#db.name});
-        true -> ok
-        end,
-        [catch(ClientPid ! {done, self()}) || ClientPid <- Clients],
-        lists:foreach(fun(DDocId) ->
-            couch_db_update_notifier:notify({ddoc_updated, {Db#db.name, DDocId}})
-        end, UpdatedDDocIds),
-        {noreply, Db2, hibernate}
+                        FullCommit2) of
+        {ok, Db2, UpdatedDDocIds} ->
+            ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
+            if Db2#db.update_seq /= Db#db.update_seq ->
+                    couch_event:notify({updated, Db2#db.name});
+                true -> ok
+            end,
+            [catch(ClientPid ! {done, self()}) || ClientPid <- Clients],
+            lists:foreach(fun(DDocId) ->
+                        couch_event:notify({ddoc_updated, {Db#db.name, DDocId}})
+                end, UpdatedDDocIds),
+            {noreply, Db2, hibernate}
     catch
-        throw: retry ->
+        throw:retry ->
             [catch(ClientPid ! {retry, self()}) || ClientPid <- Clients],
             {noreply, Db, hibernate}
     end;
@@ -307,7 +309,7 @@ handle_info({'EXIT', _Pid, normal}, Db) ->
 handle_info({'EXIT', _Pid, Reason}, Db) ->
     {stop, Reason, Db};
 handle_info({'DOWN', Ref, _, _, Reason}, #db{fd_monitor=Ref, name=Name} = Db) ->
-    ?LOG_ERROR("DB ~s shutting down - Fd ~p", [Name, Reason]),
+    lager:error("DB ~s shutting down - Fd ~p", [Name, Reason]),
     {stop, normal, Db#db{fd=undefined, fd_monitor=undefined}}.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -452,15 +454,14 @@ simple_upgrade_record(Old, _New) ->
 
 init_db(DbName, Filepath, Fd, Header0, Options) ->
     Header1 = simple_upgrade_record(Header0, #db_header{}),
-    Header =
-    case element(2, Header1) of
-    1 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    2 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    3 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
-    4 -> Header1#db_header{security_ptr = nil}; % 0.10 and pre 0.11
-    5 -> Header1; % pre 1.2
-    ?LATEST_DISK_VERSION -> Header1;
-    _ -> throw({database_disk_version_error, "Incorrect disk header version"})
+    Header = case element(2, Header1) of
+        1 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
+        2 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
+        3 -> throw({database_disk_version_error, ?OLD_DISK_VERSION_ERROR});
+        4 -> Header1#db_header{security_ptr = nil}; % 0.10 and pre 0.11
+        5 -> Header1; % pre 1.2
+        ?LATEST_DISK_VERSION -> Header1;
+        _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
 
     {ok, FsyncOptions} = couch_util:parse_term(
@@ -486,12 +487,12 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
             {compression, Compression}]),
     {ok, LocalDocsBtree} = couch_btree:open(Header#db_header.local_tree_state, Fd,
         [{compression, Compression}]),
-    case Header#db_header.security_ptr of
-    nil ->
-        Security = [],
-        SecurityPtr = nil;
-    SecurityPtr ->
-        {ok, Security} = couch_file:pread_term(Fd, SecurityPtr)
+    {Security, SecurityPtr} = case Header#db_header.security_ptr of
+        nil ->
+            {[], nil};
+        SecurityPtr1 ->
+            {ok, Security1} = couch_file:pread_term(Fd, SecurityPtr1),
+            {Security1, SecurityPtr1}
     end,
     % convert start time tuple to microsecs and store as a binary string
     {MegaSecs, Secs, MicroSecs} = now(),
@@ -567,7 +568,7 @@ flush_trees(#db{fd = Fd} = Db,
                     % Fd where the attachments were written to is not the same
                     % as our Fd. This can happen when a database is being
                     % switched out during a compaction.
-                    ?LOG_DEBUG("File where the attachments are written has"
+                    lager:debug("File where the attachments are written has"
                             " changed. Possibly retrying.", []),
                     throw(retry)
                 end,
@@ -753,11 +754,11 @@ update_local_docs(#db{local_tree=Btree}=Db, Docs) ->
     OldDocLookups = couch_btree:lookup(Btree, Ids),
     BtreeEntries = lists:zipwith(
         fun({Client, {#doc{id=Id,deleted=Delete,revs={0,PrevRevs},body=Body}, Ref}}, _OldDocLookup) ->
-            case PrevRevs of
+            PrevRev = case PrevRevs of
             [RevStr|_] ->
-                PrevRev = list_to_integer(?b2l(RevStr));
+                list_to_integer(?b2l(RevStr));
             [] ->
-                PrevRev = 0
+                0
             end,
             %% disabled conflict checking for local docs -- APK 16 June 2010
             % OldRev =
@@ -1004,13 +1005,13 @@ copy_compact(Db, NewDb0, Retry) ->
     NewDb3 = copy_docs(Db, NewDb2, lists:reverse(Uncopied), Retry),
 
     % copy misc header values
-    if NewDb3#db.security /= Db#db.security ->
+    NewDb4 = if NewDb3#db.security /= Db#db.security ->
         {ok, Ptr, _} = couch_file:append_term(
             NewDb3#db.fd, Db#db.security,
             [{compression, NewDb3#db.compression}]),
-        NewDb4 = NewDb3#db{security=Db#db.security, security_ptr=Ptr};
+        NewDb3#db{security=Db#db.security, security_ptr=Ptr};
     true ->
-        NewDb4 = NewDb3
+        NewDb3
     end,
 
     commit_compaction_data(NewDb4#db{update_seq=Db#db.update_seq}).
@@ -1018,7 +1019,7 @@ copy_compact(Db, NewDb0, Retry) ->
 
 start_copy_compact(#db{}=Db) ->
     #db{name=Name, filepath=Filepath, options=Options} = Db,
-    ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
+    lager:debug("Compaction process spawned for db \"~s\"", [Name]),
 
     {ok, NewDb, DName, DFd, MFd, Retry} =
         open_compaction_files(Name, Filepath, Options),

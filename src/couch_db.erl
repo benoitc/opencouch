@@ -31,7 +31,7 @@
 -export([reopen/1, is_system_db/1, compression/1, make_doc/5]).
 -export([load_validation_funs/1]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -define(VALID_DB_NAME, "^[a-z][a-z0-9\\_\\$()\\+\\-\\/]*$").
 
@@ -55,7 +55,7 @@ open_db_file(Filepath, Options) ->
         % crashed during the file switch.
         case couch_file:open(Filepath ++ ".compact", [nologifmissing]) of
         {ok, Fd} ->
-            ?LOG_INFO("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
+            lager:info("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
             ok = file:rename(Filepath ++ ".compact", Filepath),
             ok = couch_file:sync(Fd),
             {ok, Fd};
@@ -390,7 +390,7 @@ check_is_member(#db{user_ctx=#user_ctx{name=Name,roles=Roles}=UserCtx}=Db) ->
             WithAdminRoles -> % same list, not an reader role
                 case ReaderNames -- [Name] of
                 ReaderNames -> % same names, not a reader
-                    ?LOG_DEBUG("Not a reader: UserCtx ~p vs Names ~p Roles ~p",[UserCtx, ReaderNames, WithAdminRoles]),
+                    lager:debug("Not a reader: UserCtx ~p vs Names ~p Roles ~p",[UserCtx, ReaderNames, WithAdminRoles]),
                     throw({unauthorized, <<"You are not authorized to access this db.">>});
                 _ ->
                     ok
@@ -555,7 +555,7 @@ load_validation_funs(#db{main_pid=Pid, name = <<"shards/", _/binary>>}=Db) ->
             gen_server:cast(Pid, {load_validation_funs, Funs}),
             Funs;
         {'DOWN', Ref, _, _, Reason} ->
-            ?LOG_ERROR("could not load validation funs ~p", [Reason]),
+            lager:error("could not load validation funs ~p", [Reason]),
             throw(internal_server_error)
     end;
 load_validation_funs(#db{main_pid=Pid}=Db) ->
@@ -714,7 +714,7 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
                                 make_first_doc_on_disk(Db,Id,Start-1, tl(Path))
                             end,
 
-                    case couch_doc:has_stubs(Doc) of
+                    {Doc2, GetDiskDocFun} = case couch_doc:has_stubs(Doc) of
                     true ->
                         DiskDoc = case LoadPrevRevFun() of
                             #doc{} = DiskDoc0 ->
@@ -723,11 +723,10 @@ prep_and_validate_replicated_updates(Db, [Bucket|RestBuckets], [OldInfo|RestOldI
                                 % Force a missing_stub exception
                                 couch_doc:merge_stubs(Doc, #doc{})
                         end,
-                        Doc2 = couch_doc:merge_stubs(Doc, DiskDoc),
-                        GetDiskDocFun = fun() -> DiskDoc end;
+                        Doc1 = couch_doc:merge_stubs(Doc, DiskDoc),
+                        {Doc1, fun() -> DiskDoc end};
                     false ->
-                        Doc2 = Doc,
-                        GetDiskDocFun = LoadPrevRevFun
+                        {Doc, LoadPrevRevFun}
                     end,
 
                     case validate_doc_update(Db, Doc2, GetDiskDocFun) of
@@ -789,25 +788,27 @@ update_docs(Db, Docs, Options, replicated_changes) ->
     % associate reference with each doc in order to track duplicates
     Docs2 = lists:map(fun(Doc) -> {Doc, make_ref()} end, Docs),
     DocBuckets = before_docs_update(Db, group_alike_docs(Docs2)),
-    case (Db#db.validate_doc_funs /= []) orelse
+    {DocErrors, DocBuckets3} = case (Db#db.validate_doc_funs /= []) orelse
         lists:any(
             fun({#doc{id= <<?DESIGN_DOC_PREFIX, _/binary>>}, _Ref}) -> true;
-            ({#doc{atts=Atts}, _Ref}) ->
-                Atts /= []
+                ({#doc{atts=Atts}, _Ref}) ->
+                    Atts /= []
             end, Docs2) of
-    true ->
-        Ids = [Id || [{#doc{id=Id}, _Ref}|_] <- DocBuckets],
-        ExistingDocs = get_full_doc_infos(Db, Ids),
+        true ->
+            Ids = [Id || [{#doc{id=Id}, _Ref}|_] <- DocBuckets],
+            ExistingDocs = get_full_doc_infos(Db, Ids),
 
-        {DocBuckets2, DocErrors} =
-                prep_and_validate_replicated_updates(Db, DocBuckets, ExistingDocs, [], []),
-        DocBuckets3 = [Bucket || [_|_]=Bucket <- DocBuckets2]; % remove empty buckets
-    false ->
-        DocErrors = [],
-        DocBuckets3 = DocBuckets
+            {DocBuckets1, DocErrors1} = prep_and_validate_replicated_updates(
+                    Db, DocBuckets, ExistingDocs, [], []),
+
+            % remove empty buckets
+            DocBuckets2 = [Bucket || [_|_]=Bucket <- DocBuckets1],
+            {DocErrors1, DocBuckets2};
+        false ->
+            {[], DocBuckets}
     end,
     DocBuckets4 = [[{doc_flush_atts(check_dup_atts(Doc), Db#db.fd), Ref}
-            || {Doc, Ref} <- Bucket] || Bucket <- DocBuckets3],
+                    || {Doc, Ref} <- Bucket] || Bucket <- DocBuckets3],
     {ok, []} = write_and_commit(Db, DocBuckets4, [], [merge_conflicts | Options]),
     {ok, DocErrors};
 
@@ -831,7 +832,7 @@ update_docs(Db, Docs, Options, interactive_edit) ->
 
     DocBuckets = before_docs_update(Db, group_alike_docs(Docs3)),
 
-    case (Db#db.validate_doc_funs /= []) orelse
+    {PreCommitFailures, DocBuckets2} = case (Db#db.validate_doc_funs /= []) orelse
         lists:any(
             fun({#doc{id= <<?DESIGN_DOC_PREFIX, _/binary>>}, _Ref}) ->
                 true;
@@ -843,14 +844,14 @@ update_docs(Db, Docs, Options, interactive_edit) ->
         Ids = [Id || [{#doc{id=Id}, _Ref}|_] <- DocBuckets],
         ExistingDocInfos = get_full_doc_infos(Db, Ids),
 
-        {DocBucketsPrepped, PreCommitFailures} = prep_and_validate_updates(Db,
+        {DocBucketsPrepped, PreCommitFailures1} = prep_and_validate_updates(Db,
                 DocBuckets, ExistingDocInfos, AllOrNothing, [], []),
 
         % strip out any empty buckets
-        DocBuckets2 = [Bucket || [_|_] = Bucket <- DocBucketsPrepped];
+        DocBuckets1 = [Bucket || [_|_] = Bucket <- DocBucketsPrepped],
+        {PreCommitFailures1, DocBuckets1};
     false ->
-        PreCommitFailures = [],
-        DocBuckets2 = DocBuckets
+        {[], DocBuckets}
     end,
 
     if (AllOrNothing) and (PreCommitFailures /= []) ->
@@ -908,7 +909,7 @@ set_commit_option(Options) ->
     {_, "false"} ->
         [full_commit|Options];
     {_, Else} ->
-        ?LOG_ERROR("[couchdb] delayed_commits setting must be true/false, not ~p",
+        lager:error("[couchdb] delayed_commits setting must be true/false, not ~p",
             [Else]),
         [full_commit|Options]
     end.

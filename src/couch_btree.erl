@@ -17,7 +17,7 @@
 -export([fold_reduce/4, lookup/2, get_state/1, set_options/2]).
 -export([less/3]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 extract(#btree{extract_kv=undefined}, Value) ->
     Value;
@@ -317,30 +317,28 @@ get_chunk_size() ->
     end.
 
 modify_node(Bt, RootPointerInfo, Actions, QueryOutput) ->
-    case RootPointerInfo of
-    nil ->
-        NodeType = kv_node,
-        NodeList = [];
-    _Tuple ->
-        Pointer = element(1, RootPointerInfo),
-        {NodeType, NodeList} = get_node(Bt, Pointer)
+    {NodeType, NodeList} = case RootPointerInfo of
+        nil ->
+            {kv_node, []};
+        _Tuple ->
+            Pointer = element(1, RootPointerInfo),
+            get_node(Bt, Pointer)
     end,
     NodeTuple = list_to_tuple(NodeList),
 
-    {ok, NewNodeList, QueryOutput2} =
-    case NodeType of
-    kp_node -> modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput);
-    kv_node -> modify_kvnode(Bt, NodeTuple, 1, Actions, [], QueryOutput)
+    {ok, NewNodeList, QueryOutput2} =  case NodeType of
+        kp_node -> modify_kpnode(Bt, NodeTuple, 1, Actions, [], QueryOutput);
+        kv_node -> modify_kvnode(Bt, NodeTuple, 1, Actions, [], QueryOutput)
     end,
     case NewNodeList of
-    [] ->  % no nodes remain
-        {ok, [], QueryOutput2};
-    NodeList ->  % nothing changed
-        {LastKey, _LastValue} = element(tuple_size(NodeTuple), NodeTuple),
-        {ok, [{LastKey, RootPointerInfo}], QueryOutput2};
-    _Else2 ->
-        {ok, ResultList} = write_node(Bt, NodeType, NewNodeList),
-        {ok, ResultList, QueryOutput2}
+        [] ->  % no nodes remain
+            {ok, [], QueryOutput2};
+        NodeList ->  % nothing changed
+            {LastKey, _LastValue} = element(tuple_size(NodeTuple), NodeTuple),
+            {ok, [{LastKey, RootPointerInfo}], QueryOutput2};
+        _Else2 ->
+            {ok, ResultList} = write_node(Bt, NodeType, NewNodeList),
+            {ok, ResultList, QueryOutput2}
     end.
 
 reduce_node(#btree{reduce=nil}, _NodeType, _NodeList) ->

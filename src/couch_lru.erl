@@ -13,7 +13,7 @@
 -module(couch_lru).
 -export([new/0, insert/2, update/2, close/1]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 new() ->
     {gb_trees:empty(), dict:new()}.

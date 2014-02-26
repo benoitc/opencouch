@@ -315,4 +315,3 @@ append_item(Ems, {List, Prev}, Pos, Size) when length(List) >= Size ->
     {[Pos], PrevList};
 append_item(_Ems, {List, Prev}, Pos, _Size) ->
     {[Pos | List], Prev}.
-

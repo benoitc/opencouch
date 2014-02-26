@@ -23,7 +23,7 @@
 -export([mp_parse_doc/2]).
 -export([with_ejson_body/1]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -spec to_path(#doc{}) -> path().
 to_path(#doc{revs={Start, RevIds}}=Doc) ->
@@ -203,7 +203,7 @@ validate_docid(Id) when is_binary(Id) ->
     _Else -> ok
     end;
 validate_docid(Id) ->
-    ?LOG_DEBUG("Document id is not a string: ~p", [Id]),
+    lager:debug("Document id is not a string: ~p", [Id]),
     throw({bad_request, <<"Document id must be a string">>}).
 
 transfer_fields([], #doc{body=Fields}=Doc) ->
@@ -634,11 +634,12 @@ mp_parse_doc({body, Bytes}, AccBytes) ->
         mp_parse_doc(Next, [Bytes | AccBytes])
     end;
 mp_parse_doc(body_end, AccBytes) ->
-    receive {get_doc_bytes, Ref, From} ->
-        From ! {doc_bytes, Ref, lists:reverse(AccBytes)}
-    end,
-    fun(Next) ->
-        mp_parse_atts(Next, {Ref, [], 0, orddict:new(), []})
+    receive
+        {get_doc_bytes, Ref, From} ->
+            From ! {doc_bytes, Ref, lists:reverse(AccBytes)},
+            fun(Next) ->
+                    mp_parse_atts(Next, {Ref, [], 0, orddict:new(), []})
+            end
     end.
 
 mp_parse_atts({headers, _}, Acc) ->
@@ -680,37 +681,37 @@ mp_abort_parse_atts(_, _) ->
     fun(Next) -> mp_abort_parse_atts(Next, nil) end.
 
 maybe_send_data({Ref, Chunks, Offset, Counters, Waiting}) ->
-    receive {get_bytes, Ref, From} ->
-        NewCounters = orddict:update_counter(From, 1, Counters),
-        maybe_send_data({Ref, Chunks, Offset, NewCounters, [From|Waiting]})
+    receive
+        {get_bytes, Ref, From} ->
+            NewCounters = orddict:update_counter(From, 1, Counters),
+            maybe_send_data({Ref, Chunks, Offset, NewCounters, [From|Waiting]})
     after 0 ->
-        % reply to as many writers as possible
-        NewWaiting = lists:filter(fun(Writer) ->
-            WhichChunk = orddict:fetch(Writer, Counters),
-            ListIndex = WhichChunk - Offset,
-            if ListIndex =< length(Chunks) ->
-                Writer ! {bytes, Ref, lists:nth(ListIndex, Chunks)},
-                false;
-            true ->
-                true
-            end
-        end, Waiting),
+            % reply to as many writers as possible
+            NewWaiting = lists:filter(fun(Writer) ->
+                            WhichChunk = orddict:fetch(Writer, Counters),
+                            ListIndex = WhichChunk - Offset,
+                            if ListIndex =< length(Chunks) ->
+                                    Writer ! {bytes, Ref,
+                                              lists:nth(ListIndex, Chunks)},
+                                    false;
+                                true ->
+                                    true
+                            end
+                    end, Waiting),
 
         % check if we can drop a chunk from the head of the list
-        case Counters of
-        [] ->
-            SmallestIndex = 0;
-        _ ->
-            SmallestIndex = lists:min(element(2, lists:unzip(Counters)))
-        end,
+        SmallestIndex = case Counters of
+                [] ->
+                    0;
+                _ ->
+                    lists:min(element(2, lists:unzip(Counters)))
+            end,
         Size = length(Counters),
         N = num_mp_writers(),
-        if Size == N andalso SmallestIndex == (Offset+1) ->
-            NewChunks = tl(Chunks),
-            NewOffset = Offset+1;
-        true ->
-            NewChunks = Chunks,
-            NewOffset = Offset
+        {NewChunks, NewOffset} = if Size == N andalso SmallestIndex == (Offset+1) ->
+                    {tl(Chunks), Offset+1};
+                true ->
+                    {Chunks, Offset}
         end,
 
         % we should wait for a writer if no one has written the last chunk

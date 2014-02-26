@@ -15,7 +15,7 @@
 -export([compress/2, decompress/1, is_compressed/2]).
 -export([get_compression_method/0]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 % binaries compressed with snappy have their first byte set to this value
 -define(SNAPPY_PREFIX, 1).
@@ -81,4 +81,3 @@ is_compressed(<<?TERM_PREFIX, _/binary>>, Method) ->
     Method =:= none;
 is_compressed(Term, _Method) when not is_binary(Term) ->
     false.
-

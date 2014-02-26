@@ -10,19 +10,16 @@
 % License for the specific language governing permissions and limitations under
 % the License.
 -module(couch_uuids).
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -behaviour(gen_server).
--behaviour(config_listener).
 
 -export([start/0, stop/0]).
 -export([new/0, random/0, utc_random/0]).
 
--export([init/1, terminate/2, code_change/3]).
--export([handle_call/3, handle_cast/2, handle_info/2]).
+-export([init/1, terminate/2, code_change/3, handle_call/3,
+         handle_cast/2, handle_info/2]).
 
-% config_listener api
--export([handle_config_change/5]).
 
 start() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -87,11 +84,6 @@ handle_info(_Info, State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-handle_config_change("uuids", _, _, _, _) ->
-    {ok, gen_server:cast(?MODULE, change)};
-handle_config_change(_, _, _, _, _) ->
-    {ok, nil}.
 
 new_prefix() ->
     couch_util:to_hex((crypto:rand_bytes(13))).

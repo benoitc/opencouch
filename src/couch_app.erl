@@ -14,18 +14,10 @@
 
 -behaviour(application).
 
--include_lib("couch/include/couch_db.hrl").
-
 -export([start/2, stop/1]).
 
 start(_Type, _) ->
-    case couch_sup:start_link() of
-        {ok, _} = Resp ->
-            Resp;
-        Else ->
-            throw(Else)
-    end.
+    couch_sup:start_link().
 
 stop(_) ->
     ok.
-

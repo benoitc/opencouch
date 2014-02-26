@@ -51,7 +51,7 @@
 -export([get_all_leafs/1, count_leafs/1, remove_leafs/2, get_all_leafs_full/1, stem/2]).
 -export([map/2, mapfold/3, map_leafs/2, fold/3]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 %% @doc Merge a path with a list of paths and stem to the given length.
 -spec merge([path()], path(), pos_integer()) -> {[path()],
@@ -66,12 +66,12 @@ merge(Paths, Path, Depth) ->
 -spec merge([path()], path()) -> {[path()], conflicts | no_conflicts}.
 merge(Paths, Path) ->
     {ok, Merged, HasConflicts} = merge_one(Paths, Path, [], false),
-    if HasConflicts ->
-        Conflicts = conflicts;
-    (length(Merged) =/= length(Paths)) and (length(Merged) =/= 1) ->
-        Conflicts = conflicts;
-    true ->
-        Conflicts = no_conflicts
+    Conflicts = if HasConflicts ->
+            conflicts;
+        (length(Merged) =/= length(Paths)) and (length(Merged) =/= 1) ->
+            conflicts;
+        true ->
+            no_conflicts
     end,
     {lists:sort(Merged), Conflicts}.
 

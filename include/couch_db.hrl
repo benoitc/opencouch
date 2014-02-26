@@ -35,11 +35,6 @@
 
 -define(DEFAULT_ATTACHMENT_CONTENT_TYPE, <<"application/octet-stream">>).
 
--define(LOG_DEBUG(Format, Args), couch_log:debug(Format, Args)).
--define(LOG_INFO(Format, Args), couch_log:info(Format, Args)).
--define(LOG_WARN(Format, Args), couch_log:warning(Format, Args)).
--define(LOG_ERROR(Format, Args), couch_log:error(Format, Args)).
-
 % Tree::term() is really a tree(), but we don't want to require R13B04 yet
 -type branch() :: {Key::term(), Value::term(), Tree::term()}.
 -type path() :: {Start::pos_integer(), branch()}.
@@ -66,21 +61,6 @@
     deleted = false,
     rev_tree = [],
     leafs_size = 0
-    }).
-
--record(httpd,
-    {mochi_req,
-    peer,
-    method,
-    requested_path_parts,
-    path_parts,
-    db_url_handlers,
-    user_ctx,
-    req_body = undefined,
-    design_url_handlers,
-    auth,
-    default_fun,
-    url_handlers
     }).
 
 
@@ -254,3 +234,18 @@
     size = nil
 }).
 
+
+-record(httpd,
+    {mochi_req,
+    peer,
+    method,
+    requested_path_parts,
+    path_parts,
+    db_url_handlers,
+    user_ctx,
+    req_body = undefined,
+    design_url_handlers,
+    auth,
+    default_fun,
+    url_handlers
+    }).

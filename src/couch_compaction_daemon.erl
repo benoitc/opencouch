@@ -24,7 +24,7 @@
 % config_listener api
 -export([handle_config_change/5]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -define(CONFIG_ETS, couch_compaction_daemon_config).
 
@@ -169,14 +169,14 @@ maybe_compact_db(DbName, Config) ->
                         false -> maybe_compact_views(DbName, DDocNames, Config)
                     end;
                 {error, timeout} ->
-                    ?LOG_INFO("Compaction daemon - canceling compaction "
+                    lager:info("Compaction daemon - canceling compaction "
                         "for databaes `~s` because exceeded the allowed time.",
                         [DbName]),
                     ok = couch_db:cancel_compact(Db),
                     couch_db:close(Db);
                 {error, Reason} ->
                     couch_db:close(Db),
-                    ?LOG_ERROR("Compaction daemon - an error ocurred while"
+                    lager:error("Compaction daemon - an error ocurred while"
                         " compacting the database `~s`: ~p", [DbName, Reason])
             end,
             case ViewsMonRef of
@@ -244,12 +244,12 @@ maybe_compact_view(DbName, GroupId, Config) ->
             {'DOWN', MonRef, process, _, normal} ->
                 ok;
             {'DOWN', MonRef, process, _, Reason} ->
-                ?LOG_ERROR("Compaction daemon - an error ocurred while compacting"
+                lager:error("Compaction daemon - an error ocurred while compacting"
                     " the view group `~s` from database `~s`: ~p",
                     [GroupId, DbName, Reason]),
                 ok
             after TimeLeft ->
-                ?LOG_INFO("Compaction daemon - canceling the compaction for the "
+                lager:info("Compaction daemon - canceling the compaction for the "
                     "view group `~s` of the database `~s` because it's exceeding"
                     " the allowed period.", [GroupId, DbName]),
                 erlang:demonitor(MonRef, [flush]),
@@ -260,7 +260,7 @@ maybe_compact_view(DbName, GroupId, Config) ->
             ok
         end;
     Error ->
-        ?LOG_ERROR("Error opening view group `~s` from database `~s`: ~p",
+        lager:error("Error opening view group `~s` from database `~s`: ~p",
             [GroupId, DbName, Error]),
         ok
     end.
@@ -301,7 +301,7 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
     true ->
         {ok, DbInfo} = couch_db:get_db_info(Db),
         {Frag, SpaceRequired} = frag(DbInfo),
-        ?LOG_DEBUG("Fragmentation for database `~s` is ~p%, estimated space for"
+        lager:debug("Fragmentation for database `~s` is ~p%, estimated space for"
            " compaction is ~p bytes.", [Db#db.name, Frag, SpaceRequired]),
         case check_frag(Threshold, Frag) of
         false ->
@@ -312,7 +312,7 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
             true ->
                 true;
             false ->
-                ?LOG_WARN("Compaction daemon - skipping database `~s` "
+                lager:warning("Compaction daemon - skipping database `~s` "
                     "compaction: the estimated necessary disk space is about ~p"
                     " bytes but the currently available disk space is ~p bytes.",
                    [Db#db.name, SpaceRequired, Free]),
@@ -331,7 +331,7 @@ can_view_compact(Config, DbName, GroupId, GroupInfo) ->
             false;
         false ->
             {Frag, SpaceRequired} = frag(GroupInfo),
-            ?LOG_DEBUG("Fragmentation for view group `~s` (database `~s`) is "
+            lager:debug("Fragmentation for view group `~s` (database `~s`) is "
                 "~p%, estimated space for compaction is ~p bytes.",
                 [GroupId, DbName, Frag, SpaceRequired]),
             case check_frag(Config#config.view_frag, Frag) of
@@ -343,7 +343,7 @@ can_view_compact(Config, DbName, GroupId, GroupInfo) ->
                 true ->
                     true;
                 false ->
-                    ?LOG_WARN("Compaction daemon - skipping view group `~s` "
+                    lager:warning("Compaction daemon - skipping view group `~s` "
                         "compaction (database `~s`): the estimated necessary "
                         "disk space is about ~p bytes but the currently available"
                         " disk space is ~p bytes.",
@@ -415,11 +415,11 @@ parse_config(DbName, ConfigString) ->
     {ok, Conf} ->
         {ok, Conf};
     incomplete_period ->
-        ?LOG_ERROR("Incomplete period ('to' or 'from' missing) in the compaction"
+        lager:error("Incomplete period ('to' or 'from' missing) in the compaction"
             " configuration for database `~s`", [DbName]),
         error;
     _ ->
-        ?LOG_ERROR("Invalid compaction configuration for database "
+        lager:error("Invalid compaction configuration for database "
             "`~s`: `~s`", [DbName, ConfigString]),
         error
     end.

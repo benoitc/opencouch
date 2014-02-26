@@ -13,7 +13,7 @@
 -module(couch_file).
 -behaviour(gen_server).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 
 -define(INITIAL_WAIT, 60000).
@@ -68,7 +68,7 @@ open(Filepath, Options) ->
             case {lists:member(nologifmissing, Options), Reason} of
             {true, enoent} -> ok;
             _ ->
-            ?LOG_ERROR("Could not open file ~s: ~s",
+            lager:error("Could not open file ~s: ~s",
                 [Filepath, file:format_error(Reason)])
             end,
             Error
@@ -118,7 +118,7 @@ append_term_md5(Fd, Term, Options) ->
 
 append_binary(Fd, Bin) ->
     gen_server:call(Fd, {append_bin, assemble_file_chunk(Bin)}, infinity).
-    
+
 append_binary_md5(Fd, Bin) ->
     gen_server:call(Fd,
         {append_bin, assemble_file_chunk(Bin, couch_util:md5(Bin))}, infinity).
@@ -414,11 +414,11 @@ handle_call({append_bin, Bin}, _From, #file{fd = Fd, eof = Pos} = File) ->
 
 handle_call({write_header, Bin}, _From, #file{fd = Fd, eof = Pos} = File) ->
     BinSize = byte_size(Bin),
-    case Pos rem ?SIZE_BLOCK of
+    Padding = case Pos rem ?SIZE_BLOCK of
     0 ->
-        Padding = <<>>;
+        <<>>;
     BlockOffset ->
-        Padding = <<0:(8*(?SIZE_BLOCK-BlockOffset))>>
+        <<0:(8*(?SIZE_BLOCK-BlockOffset))>>
     end,
     FinalBin = [Padding, <<1, BinSize:32/integer>> | make_blocks(5, [Bin])],
     case file:write(Fd, FinalBin) of
@@ -472,14 +472,15 @@ load_header(Fd, Block) ->
     {ok, <<1, HeaderLen:32/integer, RestBlock/binary>>} =
         file:pread(Fd, Block * ?SIZE_BLOCK, ?SIZE_BLOCK),
     TotalBytes = calculate_total_read_len(5, HeaderLen),
-    case TotalBytes > byte_size(RestBlock) of
-    false ->
-        <<RawBin:TotalBytes/binary, _/binary>> = RestBlock;
-    true ->
-        {ok, Missing} = file:pread(
-            Fd, (Block * ?SIZE_BLOCK) + 5 + byte_size(RestBlock),
-            TotalBytes - byte_size(RestBlock)),
-        RawBin = <<RestBlock/binary, Missing/binary>>
+    RawBin = case TotalBytes > byte_size(RestBlock) of
+        false ->
+            <<RawBin1:TotalBytes/binary, _/binary>> = RestBlock,
+            RawBin1;
+        true ->
+            {ok, Missing} = file:pread(
+                    Fd, (Block * ?SIZE_BLOCK) + 5 + byte_size(RestBlock),
+                    TotalBytes - byte_size(RestBlock)),
+            <<RestBlock/binary, Missing/binary>>
     end,
     <<Md5Sig:16/binary, HeaderBin/binary>> =
         iolist_to_binary(remove_block_prefixes(5, RawBin)),

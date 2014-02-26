@@ -11,55 +11,12 @@
 % the License.
 
 -module(couch).
-
--compile(export_all).
-
-
-deps() ->
-    [
-        sasl,
-        inets,
-        os_mon,
-        crypto,
-        public_key,
-        ssl,
-        oauth,
-        ibrowse,
-        mochiweb,
-        config,
-        twig
-    ].
-
+-export([start/0, stop/0]).
 
 start() ->
     catch erlang:system_flag(scheduler_bind_type, default_bind),
-    case start_apps(deps()) of
-        ok ->
-            ok = application:start(couch);
-        Else ->
-            throw(Else)
-    end.
+    couch_util:ensure_all_started(couch).
 
 
 stop() ->
     application:stop(couch).
-
-
-restart() ->
-    init:restart().
-
-
-start_apps([]) ->
-    ok;
-start_apps([App|Rest]) ->
-    case application:start(App) of
-    ok ->
-       start_apps(Rest);
-    {error, {already_started, App}} ->
-       start_apps(Rest);
-    {error, _Reason} when App =:= public_key ->
-       % ignore on R12B5
-       start_apps(Rest);
-    {error, _Reason} ->
-       {error, {app_would_not_start, App}}
-    end.

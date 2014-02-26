@@ -22,7 +22,7 @@
 -export([init/1, terminate/2, code_change/3]).
 -export([handle_cast/2, handle_call/3, handle_info/2]).
 
--include_lib("couch/include/couch_db.hrl").
+-include("couch_db.hrl").
 
 -define(DEFAULT_BUFFER_SIZE, 4096).
 
@@ -232,35 +232,34 @@ handle_call({write, Bin}, _From, Stream) ->
         identity_len = IdenLen,
         encoding_fun = EncodingFun} = Stream,
     if BinSize + BufferLen > Max ->
-        WriteBin = lists:reverse(Buffer, [Bin]),
-        IdenMd5_2 = couch_util:md5_update(IdenMd5, WriteBin),
-        case EncodingFun(WriteBin) of
-        [] ->
-            % case where the encoder did some internal buffering
-            % (zlib does it for example)
-            WrittenLen2 = WrittenLen,
-            Md5_2 = Md5,
-            Written2 = Written;
-        WriteBin2 ->
-            {ok, Pos, _} = couch_file:append_binary(Fd, WriteBin2),
-            WrittenLen2 = WrittenLen + iolist_size(WriteBin2),
-            Md5_2 = couch_util:md5_update(Md5, WriteBin2),
-            Written2 = [{Pos, iolist_size(WriteBin2)}|Written]
-        end,
+            WriteBin = lists:reverse(Buffer, [Bin]),
+            IdenMd5_2 = couch_util:md5_update(IdenMd5, WriteBin),
+            {WrittenLen2, Md5_2, Written2} = case EncodingFun(WriteBin) of
+                [] ->
+                    % case where the encoder did some internal buffering
+                    % (zlib does it for example)
+                    {WrittenLen, Md5, Written};
+                WriteBin2 ->
+                    {ok, Pos, _} = couch_file:append_binary(Fd, WriteBin2),
+                    WrittenLen1 = WrittenLen + iolist_size(WriteBin2),
+                    Md5_1 = couch_util:md5_update(Md5, WriteBin2),
+                    Written1 = [{Pos, iolist_size(WriteBin2)}|Written],
+                    {WrittenLen1, Md5_1, Written1}
+            end,
 
-        {reply, ok, Stream#stream{
-                        written_len=WrittenLen2,
-                        written_pointers=Written2,
-                        buffer_list=[],
-                        buffer_len=0,
-                        md5=Md5_2,
-                        identity_md5=IdenMd5_2,
-                        identity_len=IdenLen + BinSize}};
-    true ->
-        {reply, ok, Stream#stream{
-                        buffer_list=[Bin|Buffer],
-                        buffer_len=BufferLen + BinSize,
-                        identity_len=IdenLen + BinSize}}
+            {reply, ok, Stream#stream{
+                    written_len=WrittenLen2,
+                    written_pointers=Written2,
+                    buffer_list=[],
+                    buffer_len=0,
+                    md5=Md5_2,
+                    identity_md5=IdenMd5_2,
+                    identity_len=IdenLen + BinSize}};
+        true ->
+            {reply, ok, Stream#stream{
+                    buffer_list=[Bin|Buffer],
+                    buffer_len=BufferLen + BinSize,
+                    identity_len=IdenLen + BinSize}}
     end;
 handle_call(close, _From, Stream) ->
     #stream{

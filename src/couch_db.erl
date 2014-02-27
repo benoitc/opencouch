@@ -12,7 +12,7 @@
 
 -module(couch_db).
 
--export([open/2,open_int/2,close/1,create/2,get_db_info/1,get_design_docs/1]).
+-export([open/2,close/1,create/2,get_db_info/1,get_design_docs/1]).
 -export([start_compact/1, cancel_compact/1]).
 -export([wait_for_compaction/1, wait_for_compaction/2]).
 -export([is_idle/1,monitor/1,count_changes_since/2]).
@@ -27,7 +27,7 @@
 -export([start_link/3,open_doc_int/3,ensure_full_commit/1,ensure_full_commit/2]).
 -export([set_security/2,get_security/1]).
 -export([changes_since/4,changes_since/5,read_doc/2,new_revid/1]).
--export([check_is_admin/1, check_is_member/1, get_doc_count/1]).
+-export([get_doc_count/1]).
 -export([reopen/1, is_system_db/1, compression/1, make_doc/5]).
 -export([load_validation_funs/1]).
 
@@ -72,24 +72,8 @@ create(DbName, Options) ->
 
 % this is for opening a database for internal purposes like the replicator
 % or the view indexer. it never throws a reader error.
-open_int(DbName, Options) ->
-    couch_server:open(DbName, Options).
-
-% this should be called anytime an http request opens the database.
-% it ensures that the http userCtx is a valid reader
 open(DbName, Options) ->
-    case couch_server:open(DbName, Options) of
-        {ok, Db} ->
-            try
-                check_is_member(Db),
-                {ok, Db}
-            catch
-                throw:Error ->
-                    close(Db),
-                    throw(Error)
-            end;
-        Else -> Else
-    end.
+    couch_server:open(DbName, Options).
 
 reopen(#db{main_pid = Pid, fd = Fd, fd_monitor = OldRef, user_ctx = UserCtx}) ->
     {ok, #db{fd = NewFd} = NewDb} = gen_server:call(Pid, get_db, infinity),
@@ -352,98 +336,21 @@ get_design_docs(#db{id_tree = IdBtree}) ->
     {ok, _, Docs} = couch_btree:fold(IdBtree, FoldFun, [], KeyOpts),
     {ok, Docs}.
 
-check_is_admin(#db{user_ctx=#user_ctx{name=Name,roles=Roles}}=Db) ->
-    {Admins} = get_admins(Db),
-    AdminRoles = [<<"_admin">> | couch_util:get_value(<<"roles">>, Admins, [])],
-    AdminNames = couch_util:get_value(<<"names">>, Admins,[]),
-    case AdminRoles -- Roles of
-    AdminRoles -> % same list, not an admin role
-        case AdminNames -- [Name] of
-        AdminNames -> % same names, not an admin
-            throw({unauthorized, <<"You are not a db or server admin.">>});
-        _ ->
-            ok
-        end;
-    _ ->
-        ok
-    end.
-
-check_is_member(#db{user_ctx=#user_ctx{name=Name,roles=Roles}=UserCtx}=Db) ->
-    case (catch check_is_admin(Db)) of
-    ok -> ok;
-    _ ->
-        {Members} = get_members(Db),
-        ReaderRoles = couch_util:get_value(<<"roles">>, Members,[]),
-        WithAdminRoles = [<<"_admin">> | ReaderRoles],
-        ReaderNames = couch_util:get_value(<<"names">>, Members,[]),
-        case ReaderRoles ++ ReaderNames of
-        [] -> ok; % no readers == public access
-        _Else ->
-            case WithAdminRoles -- Roles of
-            WithAdminRoles -> % same list, not an reader role
-                case ReaderNames -- [Name] of
-                ReaderNames -> % same names, not a reader
-                    lager:debug("Not a reader: UserCtx ~p vs Names ~p Roles ~p",[UserCtx, ReaderNames, WithAdminRoles]),
-                    throw({unauthorized, <<"You are not authorized to access this db.">>});
-                _ ->
-                    ok
-                end;
-            _ ->
-                ok
-            end
-        end
-    end.
-
-get_admins(#db{security=SecProps}) ->
-    couch_util:get_value(<<"admins">>, SecProps, {[]}).
-
-get_members(#db{security=SecProps}) ->
-    % we fallback to readers here for backwards compatibility
-    couch_util:get_value(<<"members">>, SecProps,
-        couch_util:get_value(<<"readers">>, SecProps, {[]})).
 
 get_security(#db{security=SecProps}) ->
     {SecProps}.
 
 set_security(#db{main_pid=Pid}=Db, {NewSecProps}) when is_list(NewSecProps) ->
-    check_is_admin(Db),
-    ok = validate_security_object(NewSecProps),
     ok = gen_server:call(Pid, {set_security, NewSecProps}, infinity),
     {ok, _} = ensure_full_commit(Db),
     ok;
 set_security(_, _) ->
     throw(bad_request).
 
-validate_security_object(SecProps) ->
-    Admins = couch_util:get_value(<<"admins">>, SecProps, {[]}),
-    % we fallback to readers here for backwards compatibility
-    Members = couch_util:get_value(<<"members">>, SecProps,
-        couch_util:get_value(<<"readers">>, SecProps, {[]})),
-    ok = validate_names_and_roles(Admins),
-    ok = validate_names_and_roles(Members),
-    ok.
-
-% validate user input
-validate_names_and_roles({Props}) when is_list(Props) ->
-    case couch_util:get_value(<<"names">>,Props,[]) of
-    Ns when is_list(Ns) ->
-            [throw("names must be a JSON list of strings") ||N <- Ns, not is_binary(N)],
-            Ns;
-    _ -> throw("names must be a JSON list of strings")
-    end,
-    case couch_util:get_value(<<"roles">>,Props,[]) of
-    Rs when is_list(Rs) ->
-        [throw("roles must be a JSON list of strings") ||R <- Rs, not is_binary(R)],
-        Rs;
-    _ -> throw("roles must be a JSON list of strings")
-    end,
-    ok.
-
 get_revs_limit(#db{revs_limit=Limit}) ->
     Limit.
 
 set_revs_limit(#db{main_pid=Pid}=Db, Limit) when Limit > 0 ->
-    check_is_admin(Db),
     gen_server:call(Pid, {set_revs_limit, Limit}, infinity);
 set_revs_limit(_Db, _Limit) ->
     throw(invalid_revs_limit).
@@ -496,10 +403,7 @@ group_alike_docs([{Doc,Ref}|Rest], [Bucket|RestBuckets]) ->
     end.
 
 validate_doc_update(#db{}=Db, #doc{id= <<"_design/",_/binary>>}=Doc, _GetDiskDocFun) ->
-    case catch check_is_admin(Db) of
-        ok -> validate_ddoc(Db#db.name, Doc);
-        Error -> Error
-    end;
+    validate_ddoc(Db#db.name, Doc);
 validate_doc_update(#db{validate_doc_funs = undefined} = Db, Doc, Fun) ->
     ValidationFuns = load_validation_funs(Db),
     validate_doc_update(Db#db{validate_doc_funs=ValidationFuns}, Doc, Fun);

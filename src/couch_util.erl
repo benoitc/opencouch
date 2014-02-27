@@ -28,7 +28,7 @@
 -export([reorder_results/2]).
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
--export([with_db/2]).
+-export([with_db/2, with_db/3]).
 -export([rfc1123_date/0, rfc1123_date/1]).
 -export([integer_to_boolean/1, boolean_to_integer/1]).
 -export([ensure_all_started/1, ensure_all_started/2]).
@@ -471,8 +471,11 @@ encode_doc_id(Id) ->
 
 with_db(Db, Fun) when is_record(Db, db) ->
     Fun(Db);
-with_db(DbName, Fun) ->
-    case couch_db:open_int(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]) of
+with_db(Db, Fun) ->
+    with_db(Db, Fun, []).
+
+with_db(DbName, Fun, Options) ->
+    case couch_db:open(DbName, Options) of
         {ok, Db} ->
             try
                 Fun(Db)

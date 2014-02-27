@@ -2,3 +2,5 @@
 *.so
 ebin/
 deps/
+opencouch.nonode@nohost/
+log/

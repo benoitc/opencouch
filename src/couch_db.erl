@@ -349,7 +349,7 @@ set_security(_, _) ->
 get_revs_limit(#db{revs_limit=Limit}) ->
     Limit.
 
-set_revs_limit(#db{main_pid=Pid}=Db, Limit) when Limit > 0 ->
+set_revs_limit(#db{main_pid=Pid}, Limit) when Limit > 0 ->
     gen_server:call(Pid, {set_revs_limit, Limit}, infinity);
 set_revs_limit(_Db, _Limit) ->
     throw(invalid_revs_limit).

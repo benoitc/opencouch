@@ -146,17 +146,18 @@
     update_seq,
     name,
     filepath,
-    validate_doc_funs = undefined,
+    validate_doc_funs = [],
     security = [],
     security_ptr = nil,
-    user_ctx = #user_ctx{},
+    user_ctx = nil,
     waiting_delayed_commit = nil,
     revs_limit = 1000,
     fsync_options = [],
     options = [],
     compression,
     before_doc_update = nil, % nil | fun(Doc, Db) -> NewDoc
-    after_doc_read = nil     % nil | fun(Doc, Db) -> NewDoc
+    after_doc_read = nil,     % nil | fun(Doc, Db) -> NewDoc
+    after_db_update = nil %  nil | fun(Db) -> Db,
     }).
 
 -record(view_fold_helper_funs, {

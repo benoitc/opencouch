@@ -192,11 +192,6 @@ handle_call({purge_docs, IdRevs}, _From, Db) ->
     couch_event:notify({updated, Db#db.name}),
     {reply, {ok, (Db2#db.header)#db_header.purge_seq, IdRevsPurged}, Db2}.
 
-
-handle_cast({load_validation_funs, ValidationFuns}, Db) ->
-    Db2 = Db#db{validate_doc_funs = ValidationFuns},
-    ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
-    {noreply, Db2};
 handle_cast(start_compact, Db) ->
     case Db#db.compactor_pid of
     nil ->
@@ -240,7 +235,7 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
         % the compaction file.
         couch_file:delete(RootDir, Filepath ++ ".compact.meta"),
         close_db(Db),
-        NewDb3 = refresh_validate_doc_funs(NewDb2),
+        NewDb3 = after_db_update(NewDb2),
         ok = gen_server:call(couch_server, {db_updated, NewDb3}, infinity),
         couch_event:notify({compacted, NewDb3#db.name}),
         lager:info("Compaction for db \"~s\" completed.", [Db#db.name]),
@@ -514,27 +509,22 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         fsync_options = FsyncOptions,
         options = Options,
         compression = Compression,
-        before_doc_update = couch_util:get_value(before_doc_update, Options, nil),
-        after_doc_read = couch_util:get_value(after_doc_read, Options, nil)
+        validate_doc_funs = couch_util:get_value(validate_doc_funs,
+                                                 Options, []),
+        before_doc_update = couch_util:get_value(before_doc_update,
+                                                 Options, nil),
+        after_doc_read = couch_util:get_value(after_doc_read, Options, nil),
+        after_db_update =  couch_util:get_value(after_db_update, Options, nil)
         }.
 
 
 close_db(#db{fd_monitor = Ref}) ->
     erlang:demonitor(Ref).
 
-refresh_validate_doc_funs(Db0) ->
-    Db = Db0#db{user_ctx = #user_ctx{roles=[<<"_admin">>]}},
-    {ok, DesignDocs} = couch_db:get_design_docs(Db),
-    ProcessDocFuns = lists:flatmap(
-        fun(DesignDocInfo) ->
-            {ok, DesignDoc} = couch_db:open_doc_int(
-                Db, DesignDocInfo, [ejson_body]),
-            case couch_doc:get_validate_doc_fun(DesignDoc) of
-            nil -> [];
-            Fun -> [Fun]
-            end
-        end, DesignDocs),
-    Db#db{validate_doc_funs=ProcessDocFuns}.
+after_db_update(#db{after_db_update=nil}=Db) ->
+    Db;
+after_db_update(#db{after_db_update=Fun}=Db) ->
+    Fun(Db).
 
 % rev tree functions
 
@@ -731,13 +721,11 @@ update_docs_int(Db, DocsList, NonRepDocs, MergeConflicts, FullCommit) ->
     % Check if we just updated any design documents, and update the validation
     % funs if we did.
     Db4 = case length(UpdatedDDocIds) > 0 of
-        true ->
-            ddoc_cache:evict(Db3#db.name, UpdatedDDocIds),
-            refresh_validate_doc_funs(Db3);
+        true  ->
+            after_db_update(Db3);
         false ->
             Db3
     end,
-
     {ok, commit_data(Db4, not FullCommit), UpdatedDDocIds}.
 
 update_local_docs(Db, []) ->

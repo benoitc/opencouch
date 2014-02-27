@@ -29,7 +29,6 @@
 -export([changes_since/4,changes_since/5,read_doc/2,new_revid/1]).
 -export([get_doc_count/1]).
 -export([reopen/1, is_system_db/1, compression/1, make_doc/5]).
--export([load_validation_funs/1]).
 
 -include("couch_db.hrl").
 
@@ -402,11 +401,6 @@ group_alike_docs([{Doc,Ref}|Rest], [Bucket|RestBuckets]) ->
        group_alike_docs(Rest, [[{Doc,Ref}]|[Bucket|RestBuckets]])
     end.
 
-validate_doc_update(#db{}=Db, #doc{id= <<"_design/",_/binary>>}=Doc, _GetDiskDocFun) ->
-    validate_ddoc(Db#db.name, Doc);
-validate_doc_update(#db{validate_doc_funs = undefined} = Db, Doc, Fun) ->
-    ValidationFuns = load_validation_funs(Db),
-    validate_doc_update(Db#db{validate_doc_funs=ValidationFuns}, Doc, Fun);
 validate_doc_update(#db{validate_doc_funs=[]}, _Doc, _GetDiskDocFun) ->
     ok;
 validate_doc_update(_Db, #doc{id= <<"_local/",_/binary>>}, _GetDiskDocFun) ->
@@ -417,14 +411,6 @@ validate_doc_update(Db, Doc, GetDiskDocFun) ->
             ok;
         _ ->
             validate_doc_update_int(Db, Doc, GetDiskDocFun)
-    end.
-
-validate_ddoc(DbName, DDoc) ->
-    try
-        couch_index_server:validate(DbName, couch_doc:with_ejson_body(DDoc))
-    catch
-        throw:Error ->
-            Error
     end.
 
 validate_doc_update_int(Db, Doc, GetDiskDocFun) ->
@@ -441,36 +427,6 @@ validate_doc_update_int(Db, Doc, GetDiskDocFun) ->
             Error
     end.
 
-
-% to be safe, spawn a middleman here
-load_validation_funs(#db{main_pid=Pid, name = <<"shards/", _/binary>>}=Db) ->
-    {_, Ref} = spawn_monitor(fun() ->
-        exit(ddoc_cache:open(mem3:dbname(Db#db.name), validation_funs))
-    end),
-    receive
-        {'DOWN', Ref, _, _, {ok, Funs}} ->
-            gen_server:cast(Pid, {load_validation_funs, Funs}),
-            Funs;
-        {'DOWN', Ref, _, _, Reason} ->
-            lager:error("could not load validation funs ~p", [Reason]),
-            throw(internal_server_error)
-    end;
-load_validation_funs(#db{main_pid=Pid}=Db) ->
-    {ok, DDocInfos} = get_design_docs(Db),
-    OpenDocs = fun
-        (#full_doc_info{}=D) ->
-            {ok, Doc} = open_doc_int(Db, D, [ejson_body]),
-            Doc
-    end,
-    DDocs = lists:map(OpenDocs, DDocInfos),
-    Funs = lists:flatmap(fun(DDoc) ->
-        case couch_doc:get_validate_doc_fun(DDoc) of
-            nil -> [];
-            Fun -> [Fun]
-        end
-    end, DDocs),
-    gen_server:cast(Pid, {load_validation_funs, Funs}),
-    Funs.
 
 prep_and_validate_update(Db, #doc{id=Id,revs={RevStart, Revs}}=Doc,
         OldFullDocInfo, LeafRevsDict, AllowConflict) ->

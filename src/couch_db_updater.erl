@@ -41,7 +41,7 @@ init({DbName, Filepath, Fd, Options}) ->
             Header1 =  #db_header{},
             ok = couch_file:write_header(Fd, Header1),
             % delete any old compaction files that might be hanging around
-            RootDir = config:get("couchdb", "database_dir", "."),
+            RootDir = couch_server:dir(),
             couch_file:delete(RootDir, Filepath ++ ".compact"),
             couch_file:delete(RootDir, Filepath ++ ".compact.data"),
             couch_file:delete(RootDir, Filepath ++ ".compact.meta"),
@@ -102,7 +102,7 @@ handle_call(cancel_compact, _From, #db{compactor_pid = nil} = Db) ->
 handle_call(cancel_compact, _From, #db{compactor_pid = Pid} = Db) ->
     unlink(Pid),
     exit(Pid, kill),
-    RootDir = config:get("couchdb", "database_dir", "."),
+    RootDir = couch_server:dir(),
     ok = couch_file:delete(RootDir, Db#db.filepath ++ ".compact"),
     Db2 = Db#db{compactor_pid = nil},
     ok = gen_server:call(couch_server, {db_updated, Db2}, infinity),
@@ -236,7 +236,7 @@ handle_cast({compact_done, CompactFilepath}, #db{filepath=Filepath}=Db) ->
         lager:debug("CouchDB swapping files ~s and ~s.",
                 [Filepath, CompactFilepath]),
         ok = file:rename(CompactFilepath, Filepath ++ ".compact"),
-        RootDir = config:get("couchdb", "database_dir", "."),
+        RootDir = couch_server:dir(),
         couch_file:delete(RootDir, Filepath),
         ok = file:rename(Filepath ++ ".compact", Filepath),
         % Delete the old meta compaction file after promoting
@@ -464,13 +464,13 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
 
-    {ok, FsyncOptions} = couch_util:parse_term(
-            config:get("couchdb", "fsync_options",
-                    "[before_header, after_header, on_file_open]")),
+    {ok, FsyncOptions} = couch_app:get_env(fsync_options,
+                                           [before_header, after_header,
+                                            on_file_open]),
 
     case lists:member(on_file_open, FsyncOptions) of
-    true -> ok = couch_file:sync(Fd);
-    _ -> ok
+        true -> ok = couch_file:sync(Fd);
+        _ -> ok
     end,
 
     Compression = couch_compress:get_compression_method(),
@@ -945,11 +945,14 @@ copy_compact(Db, NewDb0, Retry) ->
     Compression = couch_compress:get_compression_method(),
     NewDb = NewDb0#db{compression=Compression},
     TotalChanges = couch_db:count_changes_since(Db, NewDb#db.update_seq),
-    BufferSize = list_to_integer(
-        config:get("database_compaction", "doc_buffer_size", "524288")),
-    CheckpointAfter = couch_util:to_integer(
-        config:get("database_compaction", "checkpoint_after",
-            BufferSize * 10)),
+    {BufferSize, CheckpointAfter} = case couch_app:get_env(compaction, []) of
+        [] -> {524288, 5242880};
+        Conf ->
+            BufferSize1 = proplists:get_value(doc_buffer_size, Conf, 524288),
+            CheckpointAfter1 = proplists:get_value(checkpoint_after, Conf,
+                                                  BufferSize1 * 10),
+            {BufferSize1, CheckpointAfter1}
+    end,
 
     EnumBySeqFun =
     fun(DocInfo, _Offset,

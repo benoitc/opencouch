@@ -310,11 +310,7 @@ chunkify([InElement | RestInList], ChunkThreshold, OutList, OutListSize, OutputC
 
 -compile({inline,[get_chunk_size/0]}).
 get_chunk_size() ->
-    try
-        list_to_integer(config:get("couchdb", "btree_chunk_size", "1279"))
-    catch error:badarg ->
-        1279
-    end.
+   couch_app:get_env(btree_chunk_size, 1279).
 
 modify_node(Bt, RootPointerInfo, Actions, QueryOutput) ->
     {NodeType, NodeList} = case RootPointerInfo of

@@ -15,13 +15,16 @@
 
 -export([open/2,create/2,delete/2,get_version/0,get_uuid/0]).
 -export([all_databases/0, all_databases/2]).
--export([init/1, handle_call/3,sup_start_link/0]).
--export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
--export([dev_start/0,is_admin/2,has_admins/0,get_stats/0]).
--export([close_lru/0]).
+-export([dir/0, dir/1]).
+-export([db2couch/1]).
 
-% config_listener api
--export([handle_config_change/5]).
+-export([start_link/0]).
+-export([init/1, handle_call/3,
+         handle_cast/2,code_change/3,handle_info/2,terminate/2]).
+
+
+-export([dev_start/0,is_admin/2, get_stats/0]).
+-export([close_lru/0]).
 
 -include("couch_db.hrl").
 
@@ -55,12 +58,12 @@ get_version() ->
     end.
 
 get_uuid() ->
-    case config:get("couchdb", "uuid", nil) of
-        nil ->
+    case couch_app:get_env(uuid) of
+        undefined ->
             UUID = couch_uuids:random(),
-            config:set("couchdb", "uuid", ?b2l(UUID)),
-            UUID;
-        UUID -> ?l2b(UUID)
+            application:set_env(uuid, UUID);
+        UUID ->
+            couch_util:to_binary(UUID)
     end.
 
 get_stats() ->
@@ -68,12 +71,11 @@ get_stats() ->
             gen_server:call(couch_server, get_server),
     [{start_time, ?l2b(Time)}, {dbs_open, Open}].
 
-sup_start_link() ->
+start_link() ->
     gen_server:start_link({local, couch_server}, couch_server, [], []).
 
 
-open(DbName, Options0) ->
-    Options = maybe_add_sys_db_callbacks(DbName, Options0),
+open(DbName, Options) ->
     Ctx = couch_util:get_value(user_ctx, Options, #user_ctx{}),
     case ets:lookup(couch_dbs, DbName) of
     [#db{fd=Fd, fd_monitor=Lock} = Db] when Lock =/= locked ->
@@ -99,8 +101,7 @@ update_lru(DbName, Options) ->
 close_lru() ->
     gen_server:call(couch_server, close_lru).
 
-create(DbName, Options0) ->
-    Options = maybe_add_sys_db_callbacks(DbName, Options0),
+create(DbName, Options) ->
     case gen_server:call(couch_server, {create, DbName, Options}, infinity) of
     {ok, #db{fd=Fd} = Db} ->
         Ctx = couch_util:get_value(user_ctx, Options, #user_ctx{}),
@@ -112,50 +113,24 @@ create(DbName, Options0) ->
 delete(DbName, Options) ->
     gen_server:call(couch_server, {delete, DbName, Options}, infinity).
 
-maybe_add_sys_db_callbacks(DbName, Options) when is_binary(DbName) ->
-    maybe_add_sys_db_callbacks(?b2l(DbName), Options);
-maybe_add_sys_db_callbacks(DbName, Options) ->
-    ReplicatorDbName = config:get("replicator", "db", "_replicator"),
-    ReplicatorDbOptions = [
-        {before_doc_update, fun couch_replicator_manager:before_doc_update/2},
-        {after_doc_read, fun couch_replicator_manager:after_doc_read/2},
-        sys_db
-    ] ++ Options,
-    UsersDbName = config:get("couch_httpd_auth", "authentication_db", "_users"),
-    UsersDbOptions = [
-        {before_doc_update, fun couch_users_db:before_doc_update/2},
-        {after_doc_read, fun couch_users_db:after_doc_read/2},
-        sys_db
-    ] ++ Options,
-    DbsDbName = config:get("mem3", "shard_db", "dbs"),
-    DbsDbOptions = [sys_db | Options],
-    NodesDbName = config:get("mem3", "node_db", "nodes"),
-    NodesDbOptions = [sys_db | Options],
-    KnownSysDbs = [
-        {ReplicatorDbName, ReplicatorDbOptions},
-        {UsersDbName, UsersDbOptions},
-        {DbsDbName, DbsDbOptions},
-        {NodesDbName, NodesDbOptions}
-    ],
-    case lists:keyfind(DbName, 1, KnownSysDbs) of
-        {DbName, SysOptions} ->
-            SysOptions;
-        false ->
-            Options
-    end.
 
 check_dbname(#server{dbname_regexp=RegExp}, DbName) ->
     case re:run(DbName, RegExp, [{capture, none}]) of
-    nomatch ->
-        case DbName of
-            "_users" -> ok;
-            "_replicator" -> ok;
-            _Else ->
-                {error, illegal_database_name, DbName}
-            end;
-    match ->
-        ok
+        nomatch ->
+            {error, illegal_database_name, DbName};
+        match ->
+            ok
     end.
+
+default_dir() ->
+    Name = lists:concat(["opencouch.", node()]),
+    filename:absname(Name).
+
+dir() ->
+    couch_app:get_env(dir, default_dir()).
+
+dir(Fname) ->
+    filename:join([dir(), Fname]).
 
 is_admin(User, ClearPwd) ->
     case config:get("admins", User) of
@@ -166,34 +141,13 @@ is_admin(User, ClearPwd) ->
         false
     end.
 
-has_admins() ->
-    config:get("admins") /= [].
-
-get_full_filename(Server, DbName) ->
-    filename:join([Server#server.root_dir, "./" ++ DbName ++ ".couch"]).
-
-hash_admin_passwords() ->
-    hash_admin_passwords(true).
-
-hash_admin_passwords(Persist) ->
-    lists:foreach(
-        fun({User, ClearPassword}) ->
-            HashedPassword = couch_passwords:hash_admin_password(ClearPassword),
-            config:set("admins", User, ?b2l(HashedPassword), Persist)
-        end, couch_passwords:get_unhashed_admins()).
+db2couch(DbName) ->
+    dir(lists:concat([DbName, ".couch"])).
 
 init([]) ->
-    % read config and register for configuration changes
-
-    % just stop if one of the config settings change. couch_server_sup
-    % will restart us and then we will pick up the new settings.
-
-    RootDir = config:get("couchdb", "database_dir", "."),
-    MaxDbsOpen = list_to_integer(
-            config:get("couchdb", "max_dbs_open")),
-    ok = config:listen_for_changes(?MODULE, nil),
+    RootDir = dir(),
+    MaxDbsOpen = couch_app:get_env(max_dbs_open, 100),
     ok = couch_file:init_delete_dir(RootDir),
-    hash_admin_passwords(),
     {ok, RegExp} = re:compile(
         "^[a-z][a-z0-9\\_\\$()\\+\\-\\/]*" % use the stock CouchDB regex
         "(\\.[0-9]{10,})?$" % but allow an optional shard timestamp at the end
@@ -209,32 +163,6 @@ terminate(_Reason, _Srv) ->
     ets:foldl(fun(#db{main_pid=Pid}, _) -> couch_util:shutdown_sync(Pid) end,
         nil, couch_dbs),
     ok.
-
-handle_config_change("couchdb", "database_dir", _, _, _) ->
-    exit(whereis(couch_server), config_change),
-    remove_handler;
-handle_config_change("couchdb", "max_dbs_open", Max, _, _) ->
-    {ok, gen_server:call(couch_server,{set_max_dbs_open,list_to_integer(Max)})};
-handle_config_change("admins", _, _, Persist, _) ->
-    % spawn here so couch event manager doesn't deadlock
-    {ok, spawn(fun() -> hash_admin_passwords(Persist) end)};
-handle_config_change("httpd", "authentication_handlers", _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd", "bind_address", _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd", "port", _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd", "max_connections", _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd", "default_handler", _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd_global_handlers", _, _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change("httpd_db_handlers", _, _, _, _) ->
-    {ok, couch_httpd:stop()};
-handle_config_change(_, _, _, _, _) ->
-    {ok, nil}.
-
 
 all_databases() ->
     {ok, DbList} = all_databases(
@@ -375,7 +303,7 @@ handle_call({open, DbName, Options}, From, Server) ->
         ok ->
             case make_room(Server, Options) of
             {ok, Server2} ->
-                Filepath = get_full_filename(Server, DbNameList),
+                Filepath = db2couch(DbNameList),
                 {noreply, open_async(Server2, From, DbName, Filepath, Options)};
             CloseError ->
                 {reply, CloseError, Server}
@@ -396,7 +324,7 @@ handle_call({open, DbName, Options}, From, Server) ->
     end;
 handle_call({create, DbName, Options}, From, Server) ->
     DbNameList = binary_to_list(DbName),
-    Filepath = get_full_filename(Server, DbNameList),
+    Filepath = db2couch(DbNameList),
     case check_dbname(Server, DbNameList) of
     ok ->
         case ets:lookup(couch_dbs, DbName) of
@@ -427,7 +355,7 @@ handle_call({delete, DbName, Options}, _From, Server) ->
     DbNameList = binary_to_list(DbName),
     case check_dbname(Server, DbNameList) of
     ok ->
-        FullFilepath = get_full_filename(Server, DbNameList),
+        FullFilepath = db2couch(DbNameList),
         Server2 =
         case ets:lookup(couch_dbs, DbName) of
         [] -> Server;
@@ -481,8 +409,6 @@ handle_cast(Msg, Server) ->
 code_change(_, State, _) ->
     {ok, State}.
 
-handle_info({'EXIT', _Pid, config_change}, Server) ->
-    {stop, config_change, Server};
 handle_info({'EXIT', Pid, Reason}, Server) ->
     case ets:match_object(couch_dbs, #db{main_pid=Pid, _='_'}) of
     [#db{name = DbName, compactor_pid=Froms} = Db] ->

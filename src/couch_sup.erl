@@ -22,6 +22,10 @@ start_link() ->
 
 
 init(_) ->
+    Tasks = {couch_task_status,
+             {couch_task_status, start_link, []},
+             permanent, brutal_kill, worker, [couch_task_status]},
+
     Server = {couch_server,
               {couch_server, start_link, []},
               permanent, brutal_kill, worker, [couch_server]},
@@ -30,4 +34,4 @@ init(_) ->
                 {gen_event, start_link, [{local, couch_db_update}]},
                 permanent, brutal_kill, worker, dynamic},
 
-    {ok, {{one_for_one, 10, 3600}, [Server, EventSup]}}.
+    {ok, {{one_for_one, 10, 3600}, [Tasks, Server, EventSup]}}.

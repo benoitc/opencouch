@@ -1,3 +1,6 @@
+%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ft=erlang ts=4 sw=4 et
+
 % Licensed under the Apache License, Version 2.0 (the "License"); you may not
 % use this file except in compliance with the License. You may obtain a copy of
 % the License at
@@ -19,5 +22,18 @@
         couch_sup
     ]},
     {mod, {couch_app, []}},
+    {env, [{max_document_size, 4294967296},
+           {max_dbs_open, 100},
+           {delayed_commits, true},
+           {file_compression, snappy},
+           {fsync_options, [before_header, after_header, on_file_open]},
+           {attachment_stream_buffer_size, 4096},
+           {compaction, [{doc_buffer_size, 524288},
+                         {checkpoint_after, 5242880}]},
+           {attachements, [{compressible_types, ["text/*",
+                                                 "application/javascript",
+                                                 "application/json",
+                                                 "application/xml"]},
+                           {compression_level, 8}]}]},
     {applications, [kernel, stdlib, crypto, sasl, ssl, lager]}
 ]}.

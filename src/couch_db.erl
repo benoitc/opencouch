@@ -898,20 +898,20 @@ make_first_doc_on_disk(Db, Id, Pos, [{_Rev, #leaf{deleted=IsDel, ptr=Sp}} |_]=Do
 
 set_commit_option(Options) ->
     CommitSettings = {
-        [true || O <- Options, O==full_commit orelse O==delay_commit],
-        config:get("couchdb", "delayed_commits", "false")
+            [true || O <- Options, O==full_commit orelse O==delay_commit],
+            couch_app:get_env(delayed_commits, false)
     },
     case CommitSettings of
-    {[true], _} ->
-        Options; % user requested explicit commit setting, do not change it
-    {_, "true"} ->
-        Options; % delayed commits are enabled, do nothing
-    {_, "false"} ->
-        [full_commit|Options];
-    {_, Else} ->
-        lager:error("[couchdb] delayed_commits setting must be true/false, not ~p",
-            [Else]),
-        [full_commit|Options]
+        {[true], _} ->
+            Options; % user requested explicit commit setting, do not change it
+        {_, "true"} ->
+            Options; % delayed commits are enabled, do nothing
+        {_, "false"} ->
+            [full_commit|Options];
+        {_, Else} ->
+            lager:error("[couchdb] delayed_commits setting must be true/false, not ~p",
+                        [Else]),
+            [full_commit|Options]
     end.
 
 collect_results(Pid, MRef, ResultsAcc) ->
@@ -1021,8 +1021,7 @@ flush_att(Fd, #att{data=Data}=Att) when is_binary(Data) ->
     end);
 
 flush_att(Fd, #att{data=Fun,att_len=undefined}=Att) when is_function(Fun) ->
-    MaxChunkSize = list_to_integer(
-        config:get("couchdb", "attachment_stream_buffer_size", "4096")),
+    MaxChunkSize = couch_app:get_env(attachment_stream_buffer_size, 4096),
     with_stream(Fd, Att, fun(OutputStream) ->
         % Fun(MaxChunkSize, WriterFun) must call WriterFun
         % once for each chunk of the attachment,
@@ -1072,11 +1071,11 @@ flush_att(Fd, #att{data={follows, Parser, Ref}}=Att) when is_pid(Parser) ->
 compressible_att_type(MimeType) when is_binary(MimeType) ->
     compressible_att_type(?b2l(MimeType));
 compressible_att_type(MimeType) ->
-    TypeExpList = re:split(
-        config:get("attachments", "compressible_types", ""),
-        "\\s*,\\s*",
-        [{return, list}]
-    ),
+    TypeExpList = case couch_app:get_env(attachments, []) of
+        [] -> [];
+        Atts -> proplists:get_value(compressible_types, Atts, [])
+    end,
+
     lists:any(
         fun(TypeExp) ->
             Regexp = ["^\\s*", re:replace(TypeExp, "\\*", ".*"),
@@ -1097,14 +1096,14 @@ compressible_att_type(MimeType) ->
 % trailer, we're free to ignore this inconsistency and
 % pretend that no Content-MD5 exists.
 with_stream(Fd, #att{md5=InMd5,type=Type,encoding=Enc}=Att, Fun) ->
-    BufferSize = list_to_integer(
-        config:get("couchdb", "attachment_stream_buffer_size", "4096")),
+    BufferSize = couch_app:get_env(attachment_stream_buffer_size, 4096),
     {ok, OutputStream} = case (Enc =:= identity) andalso
         compressible_att_type(Type) of
     true ->
-        CompLevel = list_to_integer(
-            config:get("attachments", "compression_level", "0")
-        ),
+        CompLevel = case couch_app:get_env(attachments, []) of
+        [] -> 0;
+        AttsConf -> proplists:get_value(compression_level, AttsConf, 0)
+        end,
         couch_stream:open(Fd, [{buffer_size, BufferSize},
             {encoding, gzip}, {compression_level, CompLevel}]);
     _ ->

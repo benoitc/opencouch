@@ -15,9 +15,19 @@
 -behaviour(application).
 
 -export([start/2, stop/1]).
+-export([get_env/1, get_env/2]).
 
 start(_Type, _) ->
     couch_sup:start_link().
 
 stop(_) ->
     ok.
+
+get_env(Key) ->
+    get_env(Key, undefined).
+
+get_env(Key, Default) ->
+    case application:get_env(couch, Key) of
+        undefined -> Default;
+        Val -> Val
+    end.

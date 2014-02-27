@@ -26,18 +26,7 @@
 
 
 get_compression_method() ->
-    case config:get("couchdb", "file_compression") of
-    undefined ->
-        ?DEFAULT_COMPRESSION;
-    Method1 ->
-        case string:tokens(Method1, "_") of
-        [Method] ->
-            list_to_existing_atom(Method);
-        [Method, Level] ->
-            {list_to_existing_atom(Method), list_to_integer(Level)}
-        end
-    end.
-
+    couch_app:get_env(file_compression, ?DEFAULT_COMPRESSION).
 
 compress(<<?SNAPPY_PREFIX, _/binary>> = Bin, snappy) ->
     Bin;

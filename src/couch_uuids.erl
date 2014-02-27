@@ -45,7 +45,6 @@ utc_suffix(Suffix) ->
     list_to_binary(Prefix ++ Suffix).
 
 init([]) ->
-    ok = config:listen_for_changes(?MODULE, nil),
     {ok, state()}.
 
 terminate(_Reason, _State) ->
@@ -73,12 +72,6 @@ handle_cast(stop, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({gen_event_EXIT, {config_listener, ?MODULE}, _Reason}, State) ->
-    erlang:send_after(5000, self(), restart_config_listener),
-    {noreply, State};
-handle_info(restart_config_listener, State) ->
-    ok = config:listen_for_changes(?MODULE, nil),
-    {noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -92,14 +85,15 @@ inc() ->
     crypto:rand_uniform(1, 16#ffe).
 
 state() ->
-    AlgoStr = config:get("uuids", "algorithm", "random"),
-    case couch_util:to_existing_atom(AlgoStr) of
+    UuidsConf = ccouch_app:get_env(uuids, []),
+    Algo = proplists:get_value(algorithm, UuidsConf, random),
+    case Algo of
         random ->
             random;
         utc_random ->
             utc_random;
         utc_id ->
-            UtcIdSuffix = config:get("uuids", "utc_id_suffix", ""),
+            UtcIdSuffix = proplists:get_value(utc_id_suffix, UuidsConf, ""),
             {utc_id, UtcIdSuffix};
         sequential ->
             {sequential, new_prefix(), inc()};

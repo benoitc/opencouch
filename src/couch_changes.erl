@@ -122,7 +122,7 @@ loop(#state{since=Since, callback=Callback, acc=Acc,
             heartbeat=Heartbeat, timeout_acc=TimeoutAcc,
             stream=Stream}=State) ->
     receive
-        db_update ->
+        db_updated ->
             case send_changes(State) of
                 {ok, State2} when Stream =:= true ->
                     loop(State2#state{timeout_acc=0});
@@ -131,7 +131,7 @@ loop(#state{since=Since, callback=Callback, acc=Acc,
                 {stop, #state{since=LastSeq, acc=Acc2}} ->
                     Callback(stop, {LastSeq, Acc2})
             end;
-        db_delete ->
+        db_deleted ->
             Callback(stop, {Since, Acc})
     after Timeout ->
             TimeoutAcc2 = TimeoutAcc + Timeout,

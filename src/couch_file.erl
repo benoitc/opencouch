@@ -167,7 +167,7 @@ pread_iolist(Fd, Pos) ->
         Md5 ->
             {ok, IoList};
         _ ->
-            couch_log:emergency("File corruption in ~p at position ~B",
+            lager:emergency("File corruption in ~p at position ~B",
                      [Fd, Pos]),
             exit({file_corruption, <<"file corruption">>})
         end;

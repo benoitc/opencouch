@@ -62,9 +62,6 @@ init({DbName, Filepath, Fd, Options}) ->
             end
     end,
     Db = init_db(DbName, Filepath, Fd, Header, Options),
-    % we don't load validation funs here because the fabric query is liable to
-    % race conditions.  Instead see couch_db:validate_doc_update, which loads
-    % them lazily
     {ok, Db#db{main_pid = self()}}.
 
 
@@ -525,10 +522,6 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
 close_db(#db{fd_monitor = Ref}) ->
     erlang:demonitor(Ref).
 
-
-refresh_validate_doc_funs(#db{name = <<"shards/", _/binary>> = Name} = Db) ->
-    spawn(fabric, reset_validation_funs, [mem3:dbname(Name)]),
-    Db#db{validate_doc_funs = undefined};
 refresh_validate_doc_funs(Db0) ->
     Db = Db0#db{user_ctx = #user_ctx{roles=[<<"_admin">>]}},
     {ok, DesignDocs} = couch_db:get_design_docs(Db),

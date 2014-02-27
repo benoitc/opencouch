@@ -339,11 +339,6 @@ sum_tree_sizes(Acc, [T | Rest]) ->
         sum_tree_sizes(Acc + Sz, Rest)
     end.
 
-get_design_docs(#db{name = <<"shards/", _:18/binary, DbName/binary>>}) ->
-    {_, Ref} = spawn_monitor(fun() -> exit(fabric:design_docs(DbName)) end),
-    receive {'DOWN', Ref, _, _, Response} ->
-        Response
-    end;
 get_design_docs(#db{id_tree = IdBtree}) ->
     FoldFun = skip_deleted(fun
         (#full_doc_info{deleted = true}, _Reds, Acc) ->

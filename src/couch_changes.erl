@@ -195,9 +195,15 @@ send_changes_since(Db, #state{since=StartSeq, dir=Dir}=State) ->
     end,
 
     Acc0 = {ok, Db, State},
-    {Go2, _, State2} = couch_db:changes_since(Db, StartSeq, EnumFun,
-                                              [{dir, Dir}], Acc0),
-    {Go2, State2}.
+    case couch_db:changes_since(Db, StartSeq, EnumFun,  [{dir, Dir}],
+                                Acc0) of
+
+        {ok, {Go2, _, State2}} ->
+            {Go2, State2};
+        Error ->
+            lager:error("Error while getting changes: ~p~n", [Error]),
+            {stop, State}
+    end.
 
 send_changes_doc_ids(Db, DocIds, State) ->
     Lookups = couch_btree:lookup(Db#db.id_tree, DocIds),

@@ -615,8 +615,7 @@ doc_from_multi_part_stream(ContentType, DataFun, Ref) ->
                 A
             end, Doc#doc.atts),
         WaitFun = fun() ->
-            receive {'DOWN', ParserRef, _, _, _} -> ok end,
-            erlang:put(mochiweb_request_recv, true)
+            receive {'DOWN', ParserRef, _, _, _} -> ok end
         end,
         {ok, Doc#doc{atts=Atts2}, WaitFun, Parser}
     end.

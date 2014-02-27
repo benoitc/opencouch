@@ -29,6 +29,7 @@
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
 -export([with_db/2, with_db/3]).
+-export([load_doc/3, load_doc/4]).
 -export([rfc1123_date/0, rfc1123_date/1]).
 -export([integer_to_boolean/1, boolean_to_integer/1]).
 -export([ensure_all_started/1, ensure_all_started/2]).
@@ -484,6 +485,35 @@ with_db(DbName, Fun, Options) ->
             end;
         Else ->
             throw(Else)
+    end.
+
+load_doc(Db, #doc_info{}=DI, Opts) ->
+    Deleted = lists:member(deleted, Opts),
+    case (catch couch_db:open_doc(Db, DI, Opts)) of
+        {ok, #doc{deleted=false}=Doc} -> Doc;
+        {ok, #doc{deleted=true}=Doc} when Deleted -> Doc;
+        _Else -> null
+    end;
+load_doc(Db, {DocId, Rev}, Opts) ->
+    case (catch load_doc(Db, DocId, Rev, Opts)) of
+        #doc{deleted=false} = Doc -> Doc;
+        _ -> null
+    end.
+
+
+load_doc(Db, DocId, Rev, Options) ->
+    case Rev of
+        nil -> % open most recent rev
+            case (catch couch_db:open_doc(Db, DocId, Options)) of
+                {ok, Doc} -> Doc;
+                _Error -> null
+            end;
+        _ -> % open a specific rev (deletions come back as stubs)
+            case (catch couch_db:open_doc_revs(Db, DocId, [Rev], Options)) of
+                {ok, [{ok, Doc}]} -> Doc;
+                {ok, [{{not_found, missing}, Rev}]} -> null;
+                {ok, [_Else]} -> null
+            end
     end.
 
 rfc1123_date() ->

@@ -48,13 +48,14 @@ start_link(DbName, Filepath, Options) ->
 open_db_file(Filepath, Options) ->
     case couch_file:open(Filepath, Options) of
     {ok, Fd} ->
-        {ok, Fd};
+         {ok, Fd};
     {error, enoent} ->
         % couldn't find file. is there a compact version? This can happen if
         % crashed during the file switch.
         case couch_file:open(Filepath ++ ".compact", [nologifmissing]) of
         {ok, Fd} ->
-            lager:info("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
+            lager:info("Found ~s~s compaction file, using as primary storage.",
+                       [Filepath, ".compact"]),
             ok = file:rename(Filepath ++ ".compact", Filepath),
             ok = couch_file:sync(Fd),
             {ok, Fd};
@@ -755,9 +756,9 @@ set_commit_option(Options) ->
     case CommitSettings of
         {[true], _} ->
             Options; % user requested explicit commit setting, do not change it
-        {_, "true"} ->
+        {_, true} ->
             Options; % delayed commits are enabled, do nothing
-        {_, "false"} ->
+        {_, false} ->
             [full_commit|Options];
         {_, Else} ->
             lager:error("[couchdb] delayed_commits setting must be true/false, not ~p",

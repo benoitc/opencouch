@@ -13,7 +13,7 @@
 -module(couch_server).
 -behaviour(gen_server).
 
--export([open/2,create/2,delete/2,get_version/0,get_uuid/0]).
+-export([open/2,create/2, delete/2, get_uuid/0]).
 -export([all_databases/0, all_databases/2]).
 -export([dir/0, dir/1]).
 -export([db2couch/1]).
@@ -23,7 +23,7 @@
          handle_cast/2,code_change/3,handle_info/2,terminate/2]).
 
 
--export([dev_start/0,is_admin/2, get_stats/0]).
+-export([get_stats/0]).
 -export([close_lru/0]).
 
 -include("couch_db.hrl").
@@ -34,28 +34,7 @@
     max_dbs_open=100,
     dbs_open=0,
     start_time="",
-    lru = couch_lru:new()
-    }).
-
--ifdef(crypto_compat).
--define(SHA(Data), crypto:sha(Data)).
--else.
--define(SHA(Data), crypto:hash(sha, Data)).
--endif.
-
-dev_start() ->
-    couch:stop(),
-    up_to_date = make:all([load, debug_info]),
-    couch:start().
-
-get_version() ->
-    Apps = application:loaded_applications(),
-    case lists:keysearch(couch, 1, Apps) of
-    {value, {_, _, Vsn}} ->
-        Vsn;
-    false ->
-        "0.0.0"
-    end.
+    lru = couch_lru:new()}).
 
 get_uuid() ->
     case couch_app:get_env(uuid) of
@@ -132,15 +111,6 @@ dir() ->
 dir(Fname) ->
     filename:join([dir(), Fname]).
 
-is_admin(User, ClearPwd) ->
-    case config:get("admins", User) of
-    "-hashed-" ++ HashedPwdAndSalt ->
-        [HashedPwd, Salt] = string:tokens(HashedPwdAndSalt, ","),
-        couch_util:to_hex(?SHA(ClearPwd ++ Salt)) == HashedPwd;
-    _Else ->
-        false
-    end.
-
 db2couch(DbName) ->
     dir(lists:concat([DbName, ".couch"])).
 
@@ -154,8 +124,7 @@ init([]) ->
     ),
     ets:new(couch_dbs, [set, protected, named_table, {keypos, #db.name}]),
     process_flag(trap_exit, true),
-    {ok, #server{root_dir=RootDir,
-                dbname_regexp=RegExp,
+    {ok, #server{dbname_regexp=RegExp,
                 max_dbs_open=MaxDbsOpen,
                 start_time=couch_util:rfc1123_date()}}.
 
@@ -170,7 +139,7 @@ all_databases() ->
     {ok, lists:usort(DbList)}.
 
 all_databases(Fun, Acc0) ->
-    {ok, #server{root_dir=Root}} = gen_server:call(couch_server, get_server),
+    Root = dir(),
     NormRoot = couch_util:normpath(Root),
     FinalAcc = try
         filelib:fold_files(Root,
@@ -218,7 +187,7 @@ open_async(Server, From, DbName, Filepath, Options) ->
         Res = couch_db:start_link(DbName, Filepath, Options),
         case {Res, lists:member(create, Options)} of
             {{ok, _Db}, true} ->
-                couch_db_update_notifier:notify({created, DbName});
+                couch_event:notify({created, DbName});
             _ ->
                 ok
         end,
@@ -373,15 +342,16 @@ handle_call({delete, DbName, Options}, _From, Server) ->
         %% subsequent request for this DB will try to open them to use
         %% as a recovery.
         lists:foreach(fun(Ext) ->
-            couch_file:delete(Server#server.root_dir, FullFilepath ++ Ext)
-        end, [".compact", ".compact.data", ".compact.meta"]),
-        couch_file:delete(Server#server.root_dir, FullFilepath ++ ".compact"),
+                        couch_file:delete(dir(), FullFilepath ++ Ext)
+                end, [".compact", ".compact.data", ".compact.meta"]),
+
+        couch_file:delete(dir(), FullFilepath ++ ".compact"),
 
         Async = not lists:member(sync, Options),
 
-        case couch_file:delete(Server#server.root_dir, FullFilepath, Async) of
+        case couch_file:delete(dir(), FullFilepath, Async) of
         ok ->
-            couch_db_update_notifier:notify({deleted, DbName}),
+            couch_event:notify({deleted, DbName}),
             {reply, ok, Server2};
         {error, enoent} ->
             {reply, not_found, Server2};

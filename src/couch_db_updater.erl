@@ -456,9 +456,9 @@ init_db(DbName, Filepath, Fd, Header0, Options) ->
         _ -> throw({database_disk_version_error, "Incorrect disk header version"})
     end,
 
-    {ok, FsyncOptions} = couch_app:get_env(fsync_options,
-                                           [before_header, after_header,
-                                            on_file_open]),
+    FsyncOptions = couch_app:get_env(fsync_options, [before_header,
+                                                     after_header,
+                                                     on_file_open]),
 
     case lists:member(on_file_open, FsyncOptions) of
         true -> ok = couch_file:sync(Fd);

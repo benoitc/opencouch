@@ -29,5 +29,5 @@ get_env(Key) ->
 get_env(Key, Default) ->
     case application:get_env(couch, Key) of
         undefined -> Default;
-        Val -> Val
+        {ok, Val} -> Val
     end.

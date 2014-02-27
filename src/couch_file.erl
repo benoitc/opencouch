@@ -305,7 +305,6 @@ init({Filepath, Options, ReturnPid, Ref}) ->
                     {ok, 0} = file:position(Fd, 0),
                     ok = file:truncate(Fd),
                     ok = file:sync(Fd),
-                    maybe_track_open_os_files(Options),
                     erlang:send_after(?INITIAL_WAIT, self(), maybe_close),
                     {ok, #file{fd=Fd, is_sys=lists:member(sys_db, Options)}};
                 false ->
@@ -313,7 +312,6 @@ init({Filepath, Options, ReturnPid, Ref}) ->
                     init_status_error(ReturnPid, Ref, {error, eexist})
                 end;
             false ->
-                maybe_track_open_os_files(Options),
                 erlang:send_after(?INITIAL_WAIT, self(), maybe_close),
                 {ok, #file{fd=Fd, is_sys=lists:member(sys_db, Options)}}
             end;
@@ -326,7 +324,6 @@ init({Filepath, Options, ReturnPid, Ref}) ->
         {ok, Fd_Read} ->
             {ok, Fd} = file:open(Filepath, OpenOptions),
             ok = file:close(Fd_Read),
-            maybe_track_open_os_files(Options),
             {ok, Eof} = file:position(Fd, eof),
             erlang:send_after(?INITIAL_WAIT, self(), maybe_close),
             {ok, #file{fd=Fd, eof=Eof, is_sys=lists:member(sys_db, Options)}};
@@ -341,14 +338,6 @@ file_open_options(Options) ->
         [];
     false ->
         [append]
-    end.
-
-maybe_track_open_os_files(Options) ->
-    case not lists:member(sys_db, Options) of
-        true ->
-            couch_stats_collector:track_process_count({couchdb, open_os_files});
-        false ->
-            ok
     end.
 
 terminate(_Reason, #file{fd = nil}) ->
@@ -573,16 +562,8 @@ split_iolist([Sublist| Rest], SplitAt, BeginAcc) when is_list(Sublist) ->
 split_iolist([Byte | Rest], SplitAt, BeginAcc) when is_integer(Byte) ->
     split_iolist(Rest, SplitAt - 1, [Byte | BeginAcc]).
 
-
-% System dbs aren't monitored by couch_stats_collector
-is_idle(#file{is_sys=true}) ->
+is_idle(#file{}) ->
     case process_info(self(), monitored_by) of
         {monitored_by, []} -> true;
-        _ -> false
-    end;
-is_idle(#file{is_sys=false}) ->
-    case process_info(self(), monitored_by) of
-        {monitored_by, []} -> true;
-        {monitored_by, [_]} -> true;
         _ -> false
     end.

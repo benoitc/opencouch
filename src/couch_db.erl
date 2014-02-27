@@ -123,7 +123,7 @@ is_idle(#db{compactor_pid=nil, waiting_delayed_commit=nil} = Db) ->
     undefined ->
         true;
     {monitored_by, Pids} ->
-        (Pids -- [Db#db.main_pid, whereis(couch_stats_collector)]) =:= []
+        (Pids -- [Db#db.main_pid]) =:= []
     end;
 is_idle(_Db) ->
     false.
@@ -170,7 +170,6 @@ open_doc(Db, IdOrDocInfo) ->
     open_doc(Db, IdOrDocInfo, []).
 
 open_doc(Db, Id, Options) ->
-    increment_stat(Db, {couchdb, database_reads}),
     case open_doc_int(Db, Id, Options) of
     {ok, #doc{deleted=true}=Doc} ->
         case lists:member(deleted, Options) of
@@ -215,7 +214,6 @@ find_ancestor_rev_pos({RevPos, [RevId|Rest]}, AttsSinceRevs) ->
     end.
 
 open_doc_revs(Db, Id, Revs, Options) ->
-    increment_stat(Db, {couchdb, database_reads}),
     [{ok, Results}] = open_doc_revs_int(Db, [{Id, Revs}], Options),
     {ok, [apply_open_options(Result, Options) || Result <- Results]}.
 
@@ -784,7 +782,6 @@ check_dup_atts2(_) ->
 
 
 update_docs(Db, Docs, Options, replicated_changes) ->
-    increment_stat(Db, {couchdb, database_writes}),
     % associate reference with each doc in order to track duplicates
     Docs2 = lists:map(fun(Doc) -> {Doc, make_ref()} end, Docs),
     DocBuckets = before_docs_update(Db, group_alike_docs(Docs2)),
@@ -813,7 +810,6 @@ update_docs(Db, Docs, Options, replicated_changes) ->
     {ok, DocErrors};
 
 update_docs(Db, Docs, Options, interactive_edit) ->
-    increment_stat(Db, {couchdb, database_writes}),
     AllOrNothing = lists:member(all_or_nothing, Options),
     % go ahead and generate the new revision ids for the documents.
     % separate out the NonRep documents from the rest of the documents
@@ -1391,15 +1387,6 @@ after_doc_read(#db{after_doc_read = nil}, Doc) ->
     Doc;
 after_doc_read(#db{after_doc_read = Fun} = Db, Doc) ->
     Fun(couch_doc:with_ejson_body(Doc), Db).
-
-
-increment_stat(#db{options = Options}, Stat) ->
-    case lists:member(sys_db, Options) of
-    true ->
-        ok;
-    false ->
-        couch_stats_collector:increment(Stat)
-    end.
 
 skip_deleted(FoldFun) ->
     fun

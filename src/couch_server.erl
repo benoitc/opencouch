@@ -273,8 +273,6 @@ handle_call({open_result, DbName, {ok, Db}}, _From, Server) ->
     true = ets:insert(couch_dbs, Db),
     Lru = case couch_db:is_system_db(Db) of
         false ->
-            Stat = {couchdb, open_databases},
-            couch_stats_collector:track_process_count(Db#db.main_pid, Stat),
             couch_lru:insert(DbName, Server#server.lru);
         true ->
             Server#server.lru
@@ -343,7 +341,7 @@ handle_call({create, DbName, Options}, From, Server) ->
             % icky hack of field values - fd used to store create request
             CrOptions = [create | Options],
             NewDb = Db#db{fd={create, DbName, Filepath, CrOptions, From}},
-            true = ets:insert(couch_dbs, NewDb),
+           true = ets:insert(couch_dbs, NewDb),
             {noreply, Server};
         [_AlreadyRunningDb] ->
             {reply, file_exists, Server}

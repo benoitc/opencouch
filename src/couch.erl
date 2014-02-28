@@ -14,9 +14,7 @@
 -export([start/0, stop/0]).
 
 start() ->
-    catch erlang:system_flag(scheduler_bind_type, default_bind),
     couch_util:ensure_all_started(couch).
-
 
 stop() ->
     application:stop(couch).

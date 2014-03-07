@@ -13,8 +13,12 @@
 -module(couch).
 -export([start/0, stop/0]).
 
+
+%% @doc start the application
 start() ->
+    couch_deps:ensure(),
     couch_util:ensure_all_started(couch).
 
+%% @doc stop the application
 stop() ->
     application:stop(couch).

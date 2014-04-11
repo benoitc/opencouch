@@ -35,5 +35,5 @@
                                                  "application/json",
                                                  "application/xml"]},
                            {compression_level, 8}]}]},
-    {applications, [kernel, stdlib, crypto, sasl, ssl, lager]}
+    {applications, [kernel, stdlib, crypto, sasl, ssl, lager, snappy]}
 ]}.
